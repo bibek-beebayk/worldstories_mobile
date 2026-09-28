@@ -13,6 +13,7 @@ import '../../home/data/home_repository.dart';
 import '../../home/presentation/home_screen.dart' show showSurpriseStoryDialog;
 import '../../library/data/mood_repository.dart';
 import '../data/discovery_repository.dart';
+import 'interactive_story_map.dart';
 
 final discoveryRepositoryProvider = Provider<DiscoveryRepository>(
   (ref) => DiscoveryRepository(ref.watch(apiClientProvider)),
@@ -1091,61 +1092,38 @@ class StoryMapScreen extends ConsumerWidget {
   const StoryMapScreen({super.key});
   @override
   Widget build(BuildContext context, WidgetRef ref) => Scaffold(
-    appBar: AppBar(title: const Text('Story Map')),
+    appBar: AppBar(
+      title: const Text('Story Map'),
+      actions: [
+        IconButton(
+          onPressed: () => ref.invalidate(storyMapProvider),
+          tooltip: 'Refresh map',
+          icon: const Icon(Icons.refresh),
+        ),
+      ],
+    ),
     body: ref
         .watch(storyMapProvider)
         .when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (error, _) => ApiErrorView(error: error),
-          data: (data) => RefreshIndicator(
-            onRefresh: () => ref.refresh(storyMapProvider.future),
-            child: ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.all(16),
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(22),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [
-                        Color(0xFF0891B2),
-                        Color(0xFF2563EB),
-                        Color(0xFF0D9488),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    children: [
-                      const Icon(Icons.public, color: Colors.white, size: 48),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${data.totalStories} stories around the world',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 18),
-                ...data.countries.map(
-                  (country) => Card(
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: AppTheme.primary,
-                        foregroundColor: Colors.white,
-                        child: Text(country.code),
-                      ),
-                      title: Text(country.name),
-                      trailing: Text('${country.count}'),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+          data: (data) => InteractiveStoryMap(
+            storyCounts: {
+              for (final country in data.countries) country.code: country.count,
+            },
+            totalStories: data.totalStories,
+            onCountryTap: (code) {
+              final country = data.countries.firstWhere(
+                (item) => item.code == code,
+              );
+              _showFilteredStories(
+                context,
+                title: 'Stories from ${country.name}',
+                leading: const Icon(Icons.public, color: AppTheme.primary),
+                queryForPage: (page) =>
+                    CatalogueQuery(page: page, country: country.code),
+              );
+            },
           ),
         ),
   );
