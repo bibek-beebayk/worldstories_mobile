@@ -1,0 +1,16 @@
+# Copy this file to `android/app/key.properties` (not `android/key.properties`
+# — the app-level `build.gradle.kts` reads it relative to the app module) and
+# fill in real values. That file is git-ignored; never commit a real keystore
+# or its passwords.
+#
+# Generate the keystore first, if you don't have one yet:
+#   keytool -genkey -v -keystore ~/worldstories-release.jks \
+#     -keyalg RSA -keysize 2048 -validity 10000 -alias worldstories
+#
+# storeFile below is resolved relative to the `android/app/` directory, so an
+# absolute path (as here) is simplest — keep the keystore itself out of the
+# repo regardless of where it lives on disk.
+storeFile=/absolute/path/to/worldstories-release.jks
+storePassword=changeme
+keyAlias=worldstories
+keyPassword=changeme
