@@ -178,6 +178,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => ChapterReaderScreen(
           storySlug: state.pathParameters['storySlug']!,
           chapterSlug: state.pathParameters['chapterSlug']!,
+          startAtEnd: state.uri.queryParameters['at'] == 'end',
         ),
       ),
       GoRoute(
