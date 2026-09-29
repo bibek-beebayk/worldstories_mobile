@@ -3,23 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/app_theme.dart';
+import '../../../core/format_icons.dart';
+import '../../../core/modal_sheet_page.dart';
 import '../../../core/providers.dart';
 import '../../../shared/widgets/cached_app_image.dart';
+import '../../../shared/widgets/hero_glow.dart';
 import '../../analytics/application/analytics_service.dart';
 import '../../analytics/data/analytics_repository.dart';
-import '../../engagement/data/story_recommendations_repository.dart';
 import '../../engagement/presentation/favorite_button.dart';
 import '../../engagement/presentation/reactions_row.dart';
-import '../../home/data/home_repository.dart';
 import '../data/story_detail_repository.dart';
 import '../../../core/api_error_view.dart';
-
-final becauseFinishedProvider =
-    FutureProvider.family<List<StorySummary>, String>(
-      (ref, storySlug) => ref
-          .read(storyRecommendationsRepositoryProvider)
-          .becauseFinished(storySlug),
-    );
 
 final storyDetailRepositoryProvider = Provider<StoryDetailRepository>(
   (ref) => StoryDetailRepository(ref.watch(apiClientProvider)),
@@ -28,12 +22,21 @@ final storyDetailProvider = FutureProvider.family<StoryDetail, String>(
   (ref, slug) => ref.watch(storyDetailRepositoryProvider).fetch(slug),
 );
 
-class StoryDetailScreen extends ConsumerWidget {
+class StoryDetailScreen extends ConsumerStatefulWidget {
   const StoryDetailScreen({super.key, required this.slug});
   final String slug;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<StoryDetailScreen> createState() => _StoryDetailScreenState();
+}
+
+class _StoryDetailScreenState extends ConsumerState<StoryDetailScreen> {
+  final _chapterTabsKey = GlobalKey<_StoryChapterTabsState>();
+
+  String get slug => widget.slug;
+
+  @override
+  Widget build(BuildContext context) {
     ref.listen(storyDetailProvider(slug), (previous, next) {
       next.whenData(
         (story) => ref
@@ -42,123 +45,124 @@ class StoryDetailScreen extends ConsumerWidget {
       );
     });
     return Scaffold(
-      appBar: AppBar(title: const Text('Story')),
+      primary: false,
+      backgroundColor: Colors.transparent,
       body: ref
           .watch(storyDetailProvider(slug))
           .when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (error, _) => ApiErrorView(error: error),
-            data: (story) => RefreshIndicator(
-              onRefresh: () => ref.refresh(storyDetailProvider(slug).future),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+            loading: () => const _WithSheetHandle(
+              child: Column(children: [_CoverHero(loading: true)]),
+            ),
+            error: (error, _) => _WithSheetHandle(
+              child: Column(
                 children: [
-                  Center(
-                    child: SizedBox(
-                      width: 230,
-                      child: AspectRatio(
-                        aspectRatio: 3 / 4,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: _Cover(story: story),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      if (story.storyType.isNotEmpty)
-                        Chip(label: Text(story.storyType)),
-                      if (story.language.isNotEmpty)
-                        Chip(label: Text(story.language.toUpperCase())),
-                    ],
-                  ),
-                  Text(
-                    story.title,
-                    style: Theme.of(context).textTheme.headlineMedium,
-                  ),
-                  if (story.author != null)
+                  const _CoverHero(),
+                  Expanded(child: ApiErrorView(error: error)),
+                ],
+              ),
+            ),
+            data: (story) => _WithSheetHandle(
+              child: RefreshIndicator(
+                onRefresh: () => ref.refresh(storyDetailProvider(slug).future),
+                child: ListView(
+                  padding: const EdgeInsets.only(bottom: 40),
+                  children: [
+                    _CoverHero(story: story),
                     Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(
-                        'by ${story.author}',
-                        style: Theme.of(context).textTheme.titleMedium,
+                      padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              if (story.storyType.isNotEmpty)
+                                Chip(label: Text(story.storyType)),
+                              if (story.language.isNotEmpty)
+                                Chip(label: Text(story.language.toUpperCase())),
+                            ],
+                          ),
+                          Text(
+                            story.title,
+                            style: Theme.of(context).textTheme.headlineMedium,
+                          ),
+                          if (story.author != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Text(
+                                'by ${story.author}',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 18,
+                            children: [
+                              Text('★ ${story.rating.toStringAsFixed(1)}'),
+                              Text('${story.views} views'),
+                              if (story.publishedLabel != null)
+                                Text(story.publishedLabel!),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              FavoriteButton(
+                                storySlug: story.slug,
+                                initialIsFavorite: story.isFavorite,
+                                initialFavoritesCount: story.favoritesCount,
+                              ),
+                              const SizedBox(width: 8),
+                              TextButton.icon(
+                                onPressed: () => context.push(
+                                  '/story/${story.slug}/reviews',
+                                ),
+                                icon: const Icon(Icons.rate_review_outlined),
+                                label: Text('${story.reviewsCount}'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          ReactionsRow(storySlug: story.slug),
+                          _StoryOptionPills(
+                            options: _availableChapterTabs(story),
+                            onSelected: (type) {
+                              final route = _directRoute(story, type);
+                              if (route != null) {
+                                context.push(route);
+                              } else {
+                                _chapterTabsKey.currentState?.open(type);
+                              }
+                            },
+                          ),
+                          if (story.about.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            Text(
+                              'Description',
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              story.about,
+                              textAlign: TextAlign.justify,
+                              style: const TextStyle(height: 1.5),
+                            ),
+                          ],
+                          if (story.authorDetails != null)
+                            _AuthorSection(author: story.authorDetails!),
+                          _StoryChapterTabs(key: _chapterTabsKey, story: story),
+                          if (story.tags.isNotEmpty)
+                            _LabelSection(title: 'Tags', values: story.tags),
+                          if (story.themes.isNotEmpty)
+                            _LabelSection(
+                              title: 'Themes',
+                              values: story.themes,
+                            ),
+                        ],
                       ),
-                    ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 18,
-                    children: [
-                      Text('★ ${story.rating.toStringAsFixed(1)}'),
-                      Text('${story.views} views'),
-                      if (story.publishedLabel != null)
-                        Text(story.publishedLabel!),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      FavoriteButton(
-                        storySlug: story.slug,
-                        initialIsFavorite: story.isFavorite,
-                        initialFavoritesCount: story.favoritesCount,
-                      ),
-                      const SizedBox(width: 8),
-                      TextButton.icon(
-                        onPressed: () =>
-                            context.push('/story/${story.slug}/reviews'),
-                        icon: const Icon(Icons.rate_review_outlined),
-                        label: Text('${story.reviewsCount}'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  ReactionsRow(storySlug: story.slug),
-                  if (story.about.isNotEmpty) ...[
-                    const SizedBox(height: 24),
-                    Text(
-                      'Description',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      story.about,
-                      textAlign: TextAlign.justify,
-                      style: const TextStyle(height: 1.5),
                     ),
                   ],
-                  if (story.authorDetails != null)
-                    _AuthorSection(author: story.authorDetails!),
-                  _StoryChapterTabs(story: story),
-                  if (story.tags.isNotEmpty)
-                    _LabelSection(title: 'Tags', values: story.tags),
-                  if (story.themes.isNotEmpty)
-                    _LabelSection(title: 'Themes', values: story.themes),
-                  if (story.similarStories.isNotEmpty)
-                    _RecommendationGrid(
-                      title: 'Similar stories',
-                      stories: story.similarStories,
-                    ),
-                  Consumer(
-                    builder: (context, ref, _) => ref
-                        .watch(becauseFinishedProvider(story.slug))
-                        .when(
-                          loading: () => const SizedBox.shrink(),
-                          // 401 for anonymous readers (this endpoint requires
-                          // auth) is expected and should stay invisible rather
-                          // than showing an error card.
-                          error: (_, _) => const SizedBox.shrink(),
-                          data: (recommendations) => recommendations.isEmpty
-                              ? const SizedBox.shrink()
-                              : _RecommendationGrid(
-                                  title: 'Because you finished this',
-                                  stories: recommendations,
-                                ),
-                        ),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -166,144 +170,120 @@ class StoryDetailScreen extends ConsumerWidget {
   }
 }
 
-class _RecommendationGrid extends StatelessWidget {
-  const _RecommendationGrid({required this.title, required this.stories});
+/// Overlays a drag handle on the sheet's top edge, over the cover hero. The
+/// strip sits outside the scroll view, so dragging it dismisses the sheet.
+class _WithSheetHandle extends StatelessWidget {
+  const _WithSheetHandle({required this.child});
 
-  final String title;
-  final List<StorySummary> stories;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 28),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 12),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: stories.length,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 14,
-            childAspectRatio: 0.54,
-          ),
-          itemBuilder: (context, index) =>
-              _RecommendationCard(story: stories[index]),
-        ),
-      ],
-    ),
-  );
-}
-
-class _RecommendationCard extends StatelessWidget {
-  const _RecommendationCard({required this.story});
-
-  final StorySummary story;
+  final Widget child;
 
   @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: story.slug.isEmpty
-        ? null
-        : () => context.push('/story/${story.slug}'),
-    borderRadius: BorderRadius.circular(6),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        AspectRatio(
-          aspectRatio: 3 / 4,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(5),
-            child: _RecommendationCover(story: story),
+  Widget build(BuildContext context) => Stack(
+    children: [
+      Positioned.fill(child: child),
+      Positioned(
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 28,
+        child: Center(
+          child: Container(
+            width: 32,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white54,
+              borderRadius: BorderRadius.circular(2),
+            ),
           ),
         ),
-        const SizedBox(height: 7),
-        Text(
-          story.title,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(fontSize: 12),
-        ),
-      ],
-    ),
-  );
-}
-
-class _RecommendationCover extends StatelessWidget {
-  const _RecommendationCover({required this.story});
-
-  final StorySummary story;
-
-  @override
-  Widget build(BuildContext context) {
-    final fallback = _RecommendationFallbackCover(story: story);
-    final image = story.coverImage;
-    if (image == null || image.trim().isEmpty) return fallback;
-    return CachedAppImage(
-      imageUrl: image,
-      fit: BoxFit.cover,
-      width: double.infinity,
-      height: double.infinity,
-      error: (_) => fallback,
-    );
-  }
-}
-
-class _RecommendationFallbackCover extends StatelessWidget {
-  const _RecommendationFallbackCover({required this.story});
-
-  final StorySummary story;
-
-  @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          AppTheme.heroDark,
-          AppTheme.heroGradientEnd,
-          Color(0xFF4A2030),
-        ],
       ),
-    ),
-    child: Padding(
-      padding: const EdgeInsets.all(8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'WORLDSTORIES',
-            style: TextStyle(
-              color: AppTheme.primary,
-              fontSize: 6,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.6,
-            ),
-          ),
-          const Spacer(),
-          Text(
-            story.title,
-            maxLines: 4,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              height: 1.15,
-            ),
-          ),
-          if (story.author != null && story.author!.isNotEmpty) ...[
-            const SizedBox(height: 5),
-            Text(
-              story.author!,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white70, fontSize: 8),
-            ),
+    ],
+  );
+}
+
+/// The cover on the dark hero backdrop. Without a [story] it keeps the same
+/// backdrop and size, with an empty cover slot (and a spinner while
+/// [loading]), so the sheet's top looks the same in every state. Dragging
+/// down on it closes the sheet.
+class _CoverHero extends StatelessWidget {
+  const _CoverHero({this.story, this.loading = false});
+
+  final StoryDetail? story;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) => SheetDismissDragArea(
+    child: Container(
+      width: double.infinity,
+      clipBehavior: Clip.hardEdge,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppTheme.heroDark,
+            AppTheme.heroGradientEnd,
+            Color(0xFF35202D),
           ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          const Positioned(
+            right: -90,
+            top: -105,
+            child: HeroGlow(size: 280, opacity: 0.14),
+          ),
+          const Positioned(
+            left: -115,
+            bottom: -155,
+            child: HeroGlow(size: 310, opacity: 0.08),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 36, 16, 32),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: _coverMaxWidth,
+                maxHeight: 360,
+              ),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(6),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x66000000),
+                      blurRadius: 24,
+                      offset: Offset(0, 12),
+                    ),
+                  ],
+                ),
+                // Eases the jump from the 3:4 loading slot to the cover's
+                // own aspect ratio once the image arrives.
+                child: AnimatedSize(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOutCubic,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: story == null
+                        ? _CoverSlot(
+                            child: ColoredBox(
+                              color: const Color(0x14FFFFFF),
+                              child: loading
+                                  ? const Center(
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white70,
+                                      ),
+                                    )
+                                  : null,
+                            ),
+                          )
+                        : _Cover(story: story!),
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     ),
@@ -399,7 +379,7 @@ class _AuthorAvatar extends StatelessWidget {
 }
 
 class _StoryChapterTabs extends StatefulWidget {
-  const _StoryChapterTabs({required this.story});
+  const _StoryChapterTabs({super.key, required this.story});
 
   final StoryDetail story;
 
@@ -416,14 +396,14 @@ class _StoryChapterTabsState extends State<_StoryChapterTabs>
   @override
   void initState() {
     super.initState();
-    availableTabs = _tabsFor(widget.story);
+    availableTabs = _availableChapterTabs(widget.story);
     controller = TabController(length: availableTabs.length, vsync: this);
   }
 
   @override
   void didUpdateWidget(covariant _StoryChapterTabs oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final updatedTabs = _tabsFor(widget.story);
+    final updatedTabs = _availableChapterTabs(widget.story);
     final tabsChanged =
         updatedTabs.length != availableTabs.length ||
         updatedTabs.indexed.any((entry) => entry.$2 != availableTabs[entry.$1]);
@@ -439,6 +419,19 @@ class _StoryChapterTabsState extends State<_StoryChapterTabs>
   void dispose() {
     controller.dispose();
     super.dispose();
+  }
+
+  /// Switches to [type]'s tab and scrolls the chapters section into view.
+  void open(_ChapterTabType type) {
+    final index = availableTabs.indexOf(type);
+    if (index < 0) return;
+    controller.animateTo(index);
+    setState(() => selectedIndex = index);
+    Scrollable.ensureVisible(
+      context,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   @override
@@ -475,114 +468,169 @@ class _StoryChapterTabsState extends State<_StoryChapterTabs>
     );
   }
 
-  List<_ChapterTabType> _tabsFor(StoryDetail story) => [
-    if (story.chapters.isNotEmpty ||
-        story.summary.isNotEmpty ||
-        story.pdfFile != null ||
-        story.epubFile != null)
-      _ChapterTabType.read,
-    if (story.audios.isNotEmpty) _ChapterTabType.audio,
-    if (story.audios.any((audio) => audio.readAlongAvailable))
-      _ChapterTabType.readAlong,
-    if (story.videos.isNotEmpty) _ChapterTabType.watch,
-  ];
-
   Widget _contentFor(_ChapterTabType type, BuildContext context) =>
-      switch (type) {
-        _ChapterTabType.read => _readChapters(context),
-        _ChapterTabType.audio => _audioChapters(context),
-        _ChapterTabType.readAlong => _readAlongChapters(context),
-        _ChapterTabType.watch => _watchChapters(context),
-      };
+      _ChapterList(
+        entries: [
+          for (final entry in _chapterEntries(widget.story, type))
+            _ChapterTile(
+              icon: entry.icon,
+              title: entry.title,
+              onTap: () => context.push(entry.route),
+            ),
+        ],
+        emptyMessage: switch (type) {
+          _ChapterTabType.read => 'No reading chapters available.',
+          _ChapterTabType.audio => 'No audio chapters available.',
+          _ChapterTabType.readAlong => 'No read-along chapters available.',
+          _ChapterTabType.watch => 'No video chapters available.',
+        },
+      );
+}
 
-  Widget _readChapters(BuildContext context) {
-    final story = widget.story;
-    final entries = <Widget>[
-      ...story.chapters.map(
-        (chapter) => _ChapterTile(
-          icon: Icons.menu_book,
-          title: '${chapter.order}. ${chapter.title}',
-          onTap: () => context.push('/read/${story.slug}/${chapter.slug}'),
-        ),
-      ),
-      if (story.summary.isNotEmpty)
-        _ChapterTile(
-          icon: Icons.bolt,
-          title: 'Quick Read',
-          onTap: () => context.push('/quick-read/${story.slug}'),
-        ),
-      if (story.pdfFile != null)
-        _ChapterTile(
-          icon: Icons.picture_as_pdf,
-          title: 'Read as PDF',
-          onTap: () => context.push('/read-pdf/${story.slug}'),
-        ),
-      if (story.epubFile != null)
-        _ChapterTile(
-          icon: Icons.menu_book_outlined,
-          title: 'Read as EPUB',
-          onTap: () => context.push('/read-epub/${story.slug}'),
-        ),
-    ];
-    return _ChapterList(
-      entries: entries,
-      emptyMessage: 'No reading chapters available.',
-    );
-  }
+/// One row in a chapters tab: what it's called and where it opens.
+final class _ChapterEntry {
+  const _ChapterEntry(this.icon, this.title, this.route);
 
-  Widget _audioChapters(BuildContext context) => _ChapterList(
-    entries: widget.story.audios
-        .map(
-          (audio) => _ChapterTile(
-            icon: Icons.headphones,
-            title: audio.title,
-            onTap: () =>
-                context.push('/listen/${widget.story.slug}/${audio.slug}'),
+  final IconData icon;
+  final String title;
+  final String route;
+}
+
+List<_ChapterEntry> _chapterEntries(StoryDetail story, _ChapterTabType type) =>
+    switch (type) {
+      _ChapterTabType.read => [
+        for (final chapter in story.chapters)
+          _ChapterEntry(
+            FormatIcons.read,
+            '${chapter.order}. ${chapter.title}',
+            '/read/${story.slug}/${chapter.slug}',
           ),
-        )
-        .toList(),
-    emptyMessage: 'No audio chapters available.',
-  );
-
-  Widget _readAlongChapters(BuildContext context) => _ChapterList(
-    entries: widget.story.audios
-        .where((audio) => audio.readAlongAvailable)
-        .map(
-          (audio) => _ChapterTile(
-            icon: Icons.subtitles,
-            title: audio.title,
-            onTap: () =>
-                context.push('/read-along/${widget.story.slug}/${audio.slug}'),
+        if (story.summary.isNotEmpty)
+          _ChapterEntry(
+            FormatIcons.quickRead,
+            'Quick Read',
+            '/quick-read/${story.slug}',
           ),
-        )
-        .toList(),
-    emptyMessage: 'No read-along chapters available.',
-  );
-
-  Widget _watchChapters(BuildContext context) => _ChapterList(
-    entries: widget.story.videos
-        .map(
-          (video) => _ChapterTile(
-            icon: Icons.play_circle,
-            title: video.title,
-            onTap: () =>
-                context.push('/watch/${widget.story.slug}/${video.slug}'),
+        if (story.pdfFile != null)
+          _ChapterEntry(
+            Icons.picture_as_pdf,
+            'Read as PDF',
+            '/read-pdf/${story.slug}',
           ),
-        )
-        .toList(),
-    emptyMessage: 'No video chapters available.',
-  );
+        if (story.epubFile != null)
+          _ChapterEntry(
+            Icons.menu_book_outlined,
+            'Read as EPUB',
+            '/read-epub/${story.slug}',
+          ),
+      ],
+      _ChapterTabType.audio => [
+        for (final audio in story.audios)
+          _ChapterEntry(
+            FormatIcons.listen,
+            audio.title,
+            '/listen/${story.slug}/${audio.slug}',
+          ),
+      ],
+      _ChapterTabType.readAlong => [
+        for (final audio in story.audios)
+          if (audio.readAlongAvailable)
+            _ChapterEntry(
+              FormatIcons.readAlong,
+              audio.title,
+              '/read-along/${story.slug}/${audio.slug}',
+            ),
+      ],
+      _ChapterTabType.watch => [
+        for (final video in story.videos)
+          _ChapterEntry(
+            FormatIcons.watch,
+            video.title,
+            '/watch/${story.slug}/${video.slug}',
+          ),
+      ],
+    };
+
+/// Where an option pill should go straight to, skipping the chapter list,
+/// when its tab has exactly one thing to open.
+String? _directRoute(StoryDetail story, _ChapterTabType type) {
+  final entries = _chapterEntries(story, type);
+  return entries.length == 1 ? entries.single.route : null;
 }
 
 enum _ChapterTabType {
-  read('Read'),
-  audio('Audio'),
-  readAlong('Read Along'),
-  watch('Watch');
+  read('Read', 'Read', FormatIcons.read, FormatColors.read),
+  audio('Audio', 'Listen', FormatIcons.listen, FormatColors.listen),
+  readAlong(
+    'Read Along',
+    'Read Along',
+    FormatIcons.readAlong,
+    FormatColors.readAlong,
+  ),
+  watch('Watch', 'Watch', FormatIcons.watch, FormatColors.watch);
 
-  const _ChapterTabType(this.label);
+  const _ChapterTabType(this.label, this.actionLabel, this.icon, this.color);
 
+  /// Tab title in the chapters section.
   final String label;
+
+  /// Verb shown on the story option pill.
+  final String actionLabel;
+  final IconData icon;
+
+  /// Pill color; each format gets its own so they're easy to tell apart.
+  final Color color;
+}
+
+/// The formats this story offers, in chapter-tab order.
+List<_ChapterTabType> _availableChapterTabs(StoryDetail story) => [
+  if (story.chapters.isNotEmpty ||
+      story.summary.isNotEmpty ||
+      story.pdfFile != null ||
+      story.epubFile != null)
+    _ChapterTabType.read,
+  if (story.audios.isNotEmpty) _ChapterTabType.audio,
+  if (story.audios.any((audio) => audio.readAlongAvailable))
+    _ChapterTabType.readAlong,
+  if (story.videos.isNotEmpty) _ChapterTabType.watch,
+];
+
+/// One pill per available format; tapping one opens its chapters tab.
+class _StoryOptionPills extends StatelessWidget {
+  const _StoryOptionPills({required this.options, required this.onSelected});
+
+  final List<_ChapterTabType> options;
+  final ValueChanged<_ChapterTabType> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    if (options.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 20),
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        children: [
+          for (final option in options)
+            ActionChip(
+              avatar: Icon(option.icon, size: 20, color: Colors.white),
+              label: Text(option.actionLabel),
+              labelStyle: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
+              backgroundColor: option.color,
+              elevation: 3,
+              pressElevation: 1,
+              shadowColor: option.color.withValues(alpha: 0.45),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              onPressed: () => onSelected(option),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ChapterList extends StatelessWidget {
@@ -674,15 +722,36 @@ class _Cover extends StatelessWidget {
         ],
       ),
     );
-    if (story.coverImage == null || story.coverImage!.isEmpty) return fallback;
+    if (story.coverImage == null || story.coverImage!.isEmpty) {
+      return _CoverSlot(child: fallback);
+    }
+    // No fixed size: the image lays out at its own aspect ratio, scaled down
+    // to fit the hero's max width and height.
     return CachedAppImage(
       imageUrl: story.coverImage!,
-      fit: BoxFit.cover,
+      fit: BoxFit.contain,
       decodeWidth: 900,
       diskCacheWidth: 900,
-      error: (_) => fallback,
+      placeholder: (_) => const _CoverSlot(child: BookPageOpeningLoader()),
+      error: (_) => _CoverSlot(child: fallback),
     );
   }
+}
+
+const _coverMaxWidth = 230.0;
+
+/// A 3:4 cover-sized box for content with no aspect ratio of its own: the
+/// loading placeholder and the generated fallback cover.
+class _CoverSlot extends StatelessWidget {
+  const _CoverSlot({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: _coverMaxWidth,
+    child: AspectRatio(aspectRatio: 3 / 4, child: child),
+  );
 }
 
 class _LabelSection extends StatelessWidget {

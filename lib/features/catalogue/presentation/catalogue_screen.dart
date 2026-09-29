@@ -8,6 +8,7 @@ import '../../../core/providers.dart';
 import '../../../shared/widgets/cached_app_image.dart';
 import '../../home/data/home_repository.dart';
 import '../data/catalogue_repository.dart';
+import '../../../core/format_icons.dart';
 
 final catalogueRepositoryProvider = Provider<CatalogueRepository>(
   (ref) => CatalogueRepository(ref.watch(apiClientProvider)),
@@ -15,6 +16,78 @@ final catalogueRepositoryProvider = Provider<CatalogueRepository>(
 final catalogueFiltersProvider = FutureProvider<CatalogueFilters>(
   (ref) => ref.watch(catalogueRepositoryProvider).fetchFilters(),
 );
+
+enum _LibraryMode { read, listen, watch, readAlong, quickRead }
+
+extension on _LibraryMode {
+  String get label => switch (this) {
+    _LibraryMode.read => 'Read',
+    _LibraryMode.listen => 'Listen',
+    _LibraryMode.watch => 'Watch',
+    _LibraryMode.readAlong => 'Read Along',
+    _LibraryMode.quickRead => 'Quick Read',
+  };
+
+  IconData get icon => switch (this) {
+    _LibraryMode.read => FormatIcons.read,
+    _LibraryMode.listen => FormatIcons.listen,
+    _LibraryMode.watch => FormatIcons.watch,
+    _LibraryMode.readAlong => FormatIcons.readAlong,
+    _LibraryMode.quickRead => FormatIcons.quickRead,
+  };
+}
+
+class _PageSwipeTracker {
+  int originPage = 0;
+}
+
+class _QuickPageScrollPhysics extends ScrollPhysics {
+  const _QuickPageScrollPhysics({required this.tracker, super.parent});
+
+  static const dragThreshold = 0.08;
+  static const flingVelocity = 30.0;
+  final _PageSwipeTracker tracker;
+
+  @override
+  _QuickPageScrollPhysics applyTo(ScrollPhysics? ancestor) =>
+      _QuickPageScrollPhysics(tracker: tracker, parent: buildParent(ancestor));
+
+  @override
+  Simulation? createBallisticSimulation(
+    ScrollMetrics position,
+    double velocity,
+  ) {
+    if ((velocity <= 0 && position.pixels <= position.minScrollExtent) ||
+        (velocity >= 0 && position.pixels >= position.maxScrollExtent)) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+
+    final visiblePage = position.pixels / position.viewportDimension;
+    final displacement = visiblePage - tracker.originPage;
+    var targetPage = tracker.originPage;
+    if (displacement.abs() >= dragThreshold) {
+      targetPage += displacement.isNegative ? -1 : 1;
+    } else if (velocity.abs() >= flingVelocity) {
+      targetPage += velocity.isNegative ? -1 : 1;
+    }
+
+    final lastPage = (position.maxScrollExtent / position.viewportDimension)
+        .round();
+    targetPage = targetPage.clamp(0, lastPage);
+    final targetPixels = targetPage * position.viewportDimension;
+    final tolerance = toleranceFor(position);
+    if ((targetPixels - position.pixels).abs() <= tolerance.distance) {
+      return null;
+    }
+    return ScrollSpringSimulation(
+      spring,
+      position.pixels,
+      targetPixels,
+      velocity,
+      tolerance: tolerance,
+    );
+  }
+}
 
 class CatalogueScreen extends ConsumerStatefulWidget {
   const CatalogueScreen({super.key, this.initialMoodSlugs = ''});
@@ -26,8 +99,10 @@ class CatalogueScreen extends ConsumerStatefulWidget {
 }
 
 class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
+  static const _storiesPerPage = 9;
   final search = TextEditingController();
-  final scrollController = ScrollController();
+  final pageController = PageController();
+  final pageSwipeTracker = _PageSwipeTracker();
   final stories = <StorySummary>[];
   bool searchVisible = false;
   bool initialLoading = true;
@@ -37,12 +112,12 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
   int page = 0;
   int pages = 1;
   int totalCount = 0;
+  int visiblePage = 0;
+  int targetPageToLoad = 0;
+  bool ensuringPages = false;
   int loadGeneration = 0;
   String sort = 'recent';
-  bool audio = false;
-  bool video = false;
-  bool quickRead = false;
-  bool readAlong = false;
+  _LibraryMode libraryMode = _LibraryMode.read;
   Set<int> genres = {};
   Set<int> categories = {};
   late Set<String> moodSlugs;
@@ -51,11 +126,12 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
   String storyType = 'all';
   String status = 'all';
 
+  int get uiPageCount => (totalCount + _storiesPerPage - 1) ~/ _storiesPerPage;
+
   @override
   void initState() {
     super.initState();
     moodSlugs = _parseMoodSlugs(widget.initialMoodSlugs);
-    scrollController.addListener(_handleScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) => refresh());
   }
 
@@ -72,34 +148,18 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
   @override
   void dispose() {
     search.dispose();
-    scrollController
-      ..removeListener(_handleScroll)
-      ..dispose();
+    pageController.dispose();
     super.dispose();
-  }
-
-  void _handleScroll() {
-    if (scrollController.position.extentAfter < 500) _loadNextPage();
-  }
-
-  void _continueIfViewportIsNotFilled() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted &&
-          scrollController.hasClients &&
-          scrollController.position.extentAfter < 500) {
-        _loadNextPage();
-      }
-    });
   }
 
   CatalogueQuery _queryFor(int requestedPage) => CatalogueQuery(
     page: requestedPage,
     search: search.text.trim(),
     sort: sort,
-    hasAudio: audio,
-    hasVideo: video,
-    hasSummary: quickRead,
-    hasReadAlong: readAlong,
+    hasAudio: libraryMode == _LibraryMode.listen,
+    hasVideo: libraryMode == _LibraryMode.watch,
+    hasSummary: libraryMode == _LibraryMode.quickRead,
+    hasReadAlong: libraryMode == _LibraryMode.readAlong,
     genreIds: {...genres},
     categoryIds: {...categories},
     moodSlugs: {...moodSlugs},
@@ -119,6 +179,8 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
       page = 0;
       pages = 1;
       totalCount = 0;
+      visiblePage = 0;
+      targetPageToLoad = 0;
       stories.clear();
     });
     try {
@@ -133,7 +195,8 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
         totalCount = result.count;
         initialLoading = false;
       });
-      _continueIfViewportIsNotFilled();
+      if (pageController.hasClients) pageController.jumpToPage(0);
+      if (uiPageCount > 1) _ensureStoriesForPage(1);
     } catch (error) {
       if (!mounted || generation != loadGeneration) return;
       setState(() {
@@ -163,13 +226,29 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
         totalCount = result.count;
         loadingMore = false;
       });
-      _continueIfViewportIsNotFilled();
     } catch (error) {
       if (!mounted || generation != loadGeneration) return;
       setState(() {
         loadMoreError = error;
         loadingMore = false;
       });
+    }
+  }
+
+  Future<void> _ensureStoriesForPage(int pageIndex) async {
+    if (pageIndex > targetPageToLoad) targetPageToLoad = pageIndex;
+    if (initialLoading || ensuringPages) return;
+    ensuringPages = true;
+    try {
+      while (mounted) {
+        final requiredStories = ((targetPageToLoad + 1) * _storiesPerPage)
+            .clamp(0, totalCount);
+        if (stories.length >= requiredStories || page >= pages) return;
+        await _loadNextPage();
+        if (loadMoreError != null) return;
+      }
+    } finally {
+      ensuringPages = false;
     }
   }
 
@@ -266,60 +345,57 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             scrollDirection: Axis.horizontal,
             children: [
-              DropdownButton<String>(
-                value: sort,
-                underline: const SizedBox(),
-                items: const [
-                  DropdownMenuItem(value: 'recent', child: Text('Recent')),
-                  DropdownMenuItem(value: 'rating', child: Text('Top rated')),
-                  DropdownMenuItem(value: 'views', child: Text('Most viewed')),
-                ],
-                onChanged: (value) {
-                  if (value != null) {
-                    sort = value;
-                    refresh();
-                  }
-                },
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                padding: const EdgeInsets.only(left: 12, right: 7),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: DropdownButton<String>(
+                  value: sort,
+                  isDense: true,
+                  borderRadius: BorderRadius.circular(10),
+                  underline: const SizedBox(),
+                  icon: const Icon(Icons.keyboard_arrow_down, size: 19),
+                  items: const [
+                    DropdownMenuItem(value: 'recent', child: Text('Recent')),
+                    DropdownMenuItem(value: 'rating', child: Text('Top rated')),
+                    DropdownMenuItem(
+                      value: 'views',
+                      child: Text('Most viewed'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null && value != sort) {
+                      sort = value;
+                      refresh();
+                    }
+                  },
+                ),
               ),
               const SizedBox(width: 10),
+              ..._LibraryMode.values.map(
+                (mode) => _LibraryModeChip(
+                  label: mode.label,
+                  icon: mode.icon,
+                  selected: libraryMode == mode,
+                  onSelected: () {
+                    if (libraryMode == mode) return;
+                    libraryMode = mode;
+                    refresh();
+                  },
+                ),
+              ),
               ...moodSlugs.map(
                 (mood) => _FilterChip(
                   label: _moodLabel(mood),
                   selected: true,
                   onSelected: (_) => context.go('/library'),
                 ),
-              ),
-              _FilterChip(
-                label: 'Audio',
-                selected: audio,
-                onSelected: (value) {
-                  audio = value;
-                  refresh();
-                },
-              ),
-              _FilterChip(
-                label: 'Video',
-                selected: video,
-                onSelected: (value) {
-                  video = value;
-                  refresh();
-                },
-              ),
-              _FilterChip(
-                label: 'Quick Read',
-                selected: quickRead,
-                onSelected: (value) {
-                  quickRead = value;
-                  refresh();
-                },
-              ),
-              _FilterChip(
-                label: 'Read Along',
-                selected: readAlong,
-                onSelected: (value) {
-                  readAlong = value;
-                  refresh();
-                },
               ),
             ],
           ),
@@ -328,61 +404,64 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
           child: initialLoading
               ? const Center(child: CircularProgressIndicator())
               : initialError != null
-              ? ListView(
-                  physics: const AlwaysScrollableScrollPhysics(),
+              ? ApiErrorView(error: initialError!, onRetry: refresh)
+              : stories.isEmpty
+              ? const Center(child: Text('No stories found.'))
+              : Column(
                   children: [
-                    ApiErrorView(error: initialError!, onRetry: refresh),
-                  ],
-                )
-              : RefreshIndicator(
-                  onRefresh: refresh,
-                  child: CustomScrollView(
-                    controller: scrollController,
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    slivers: [
-                      SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-                          child: Text(
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      child: Row(
+                        children: [
+                          Text(
                             '$totalCount stories',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
+                          const Spacer(),
+                          Text(
+                            'Page ${visiblePage + 1} of '
+                            '$uiPageCount',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: NotificationListener<ScrollStartNotification>(
+                        onNotification: (notification) {
+                          if (notification.dragDetails != null) {
+                            pageSwipeTracker.originPage =
+                                pageController.page?.round() ?? visiblePage;
+                          }
+                          return false;
+                        },
+                        child: PageView.builder(
+                          controller: pageController,
+                          pageSnapping: false,
+                          physics: _QuickPageScrollPhysics(
+                            tracker: pageSwipeTracker,
+                          ),
+                          itemCount: uiPageCount,
+                          onPageChanged: (index) {
+                            setState(() => visiblePage = index);
+                            final nextPage = index + 1;
+                            _ensureStoriesForPage(
+                              nextPage < uiPageCount ? nextPage : index,
+                            );
+                          },
+                          itemBuilder: (context, pageIndex) =>
+                              _CataloguePageGrid(
+                                pageIndex: pageIndex,
+                                stories: stories,
+                                totalCount: totalCount,
+                                loading: loadingMore,
+                                failed: loadMoreError != null,
+                                onLoad: () => _ensureStoriesForPage(pageIndex),
+                              ),
                         ),
                       ),
-                      if (stories.isEmpty)
-                        const SliverFillRemaining(
-                          hasScrollBody: false,
-                          child: Center(child: Text('No stories found.')),
-                        )
-                      else
-                        SliverPadding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          sliver: SliverGrid.builder(
-                            itemCount: stories.length,
-                            gridDelegate:
-                                const SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: 3,
-                                  crossAxisSpacing: 10,
-                                  mainAxisSpacing: 14,
-                                  childAspectRatio: .54,
-                                ),
-                            itemBuilder: (context, index) =>
-                                _CatalogueCard(story: stories[index]),
-                          ),
-                        ),
-                      SliverToBoxAdapter(
-                        child: SafeArea(
-                          top: false,
-                          child: _LoadMoreFooter(
-                            loading: loadingMore,
-                            failed: loadMoreError != null,
-                            hasMore: page < pages,
-                            onRetry: _loadNextPage,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
         ),
       ],
@@ -402,45 +481,104 @@ String _moodLabel(String slug) => slug
     .map((part) => '${part[0].toUpperCase()}${part.substring(1)}')
     .join(' ');
 
-class _LoadMoreFooter extends StatelessWidget {
-  const _LoadMoreFooter({
+class _CataloguePageGrid extends StatefulWidget {
+  const _CataloguePageGrid({
+    required this.pageIndex,
+    required this.stories,
+    required this.totalCount,
     required this.loading,
     required this.failed,
-    required this.hasMore,
-    required this.onRetry,
+    required this.onLoad,
   });
 
+  final int pageIndex;
+  final List<StorySummary> stories;
+  final int totalCount;
   final bool loading;
   final bool failed;
-  final bool hasMore;
-  final VoidCallback onRetry;
+  final VoidCallback onLoad;
+
+  @override
+  State<_CataloguePageGrid> createState() => _CataloguePageGridState();
+}
+
+class _CataloguePageGridState extends State<_CataloguePageGrid> {
+  bool loadRequested = false;
+
+  @override
+  void didUpdateWidget(covariant _CataloguePageGrid oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.stories.length != oldWidget.stories.length ||
+        widget.failed != oldWidget.failed) {
+      loadRequested = false;
+    }
+  }
+
+  void _requestMissingStories(int firstIndex) {
+    if (firstIndex < widget.stories.length || loadRequested) return;
+    loadRequested = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onLoad();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (loading) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 24),
-        child: Center(
-          child: SizedBox.square(
-            dimension: 26,
-            child: CircularProgressIndicator(strokeWidth: 2.5),
-          ),
-        ),
-      );
-    }
-    if (failed) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: Center(
-          child: TextButton.icon(
-            onPressed: onRetry,
-            icon: const Icon(Icons.refresh),
-            label: const Text('Retry loading more'),
-          ),
-        ),
-      );
-    }
-    return SizedBox(height: hasMore ? 56 : 24);
+    const itemsPerPage = _CatalogueScreenState._storiesPerPage;
+    final firstIndex = widget.pageIndex * itemsPerPage;
+    _requestMissingStories(firstIndex);
+    return ColoredBox(
+      color: Colors.white,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const verticalPadding = 8.0;
+          const rowSpacing = 8.0;
+          final itemHeight =
+              (constraints.maxHeight - verticalPadding - rowSpacing * 2) / 3;
+          return GridView.builder(
+            physics: const NeverScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, verticalPadding),
+            itemCount: itemsPerPage,
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: rowSpacing,
+              mainAxisExtent: itemHeight,
+            ),
+            itemBuilder: (context, localIndex) {
+              final storyIndex = firstIndex + localIndex;
+              if (storyIndex >= widget.totalCount) return const SizedBox();
+              if (storyIndex < widget.stories.length) {
+                return _CatalogueCard(story: widget.stories[storyIndex]);
+              }
+              if (storyIndex != widget.stories.length) {
+                return const SizedBox();
+              }
+              if (widget.failed) {
+                return Center(
+                  child: IconButton.filledTonal(
+                    onPressed: widget.onLoad,
+                    tooltip: 'Retry loading page',
+                    icon: const Icon(Icons.refresh),
+                  ),
+                );
+              }
+              return Center(
+                child: SizedBox.square(
+                  dimension: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: widget.loading
+                        ? AppTheme.primary
+                        : Colors.transparent,
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
   }
 }
 
@@ -460,6 +598,40 @@ class _FilterChip extends StatelessWidget {
       label: Text(label),
       selected: selected,
       onSelected: onSelected,
+    ),
+  );
+}
+
+class _LibraryModeChip extends StatelessWidget {
+  const _LibraryModeChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onSelected;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(right: 4),
+    child: ChoiceChip(
+      label: Semantics(
+        label: label,
+        selected: selected,
+        child: Tooltip(
+          message: label,
+          child: Icon(icon, size: 18, color: selected ? Colors.white : null),
+        ),
+      ),
+      selected: selected,
+      showCheckmark: false,
+      visualDensity: VisualDensity.compact,
+      labelPadding: const EdgeInsets.symmetric(horizontal: 2),
+      onSelected: (_) => onSelected(),
     ),
   );
 }
@@ -731,29 +903,34 @@ class _CatalogueCard extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        AspectRatio(
-          aspectRatio: 3 / 4,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: story.coverImage == null
-                ? _Fallback(story: story)
-                : CachedAppImage(
-                    imageUrl: story.coverImage!,
-                    fit: BoxFit.cover,
-                    error: (_) => _Fallback(story: story),
-                  ),
+        Expanded(
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: AspectRatio(
+              aspectRatio: 3 / 4,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: story.coverImage == null
+                    ? _Fallback(story: story)
+                    : CachedAppImage(
+                        imageUrl: story.coverImage!,
+                        fit: BoxFit.cover,
+                        error: (_) => _Fallback(story: story),
+                      ),
+              ),
+            ),
           ),
         ),
-        const SizedBox(height: 7),
+        const SizedBox(height: 5),
         SizedBox(
-          height: 36,
+          height: 31,
           child: Text(
             story.title,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(
               context,
-            ).textTheme.titleSmall?.copyWith(fontSize: 12),
+            ).textTheme.titleSmall?.copyWith(fontSize: 11, height: 1.2),
           ),
         ),
       ],

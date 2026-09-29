@@ -37,4 +37,31 @@ void main() {
     expect(story.chapters.single.order, 1);
     expect(story.tags, ['Gothic']);
   });
+
+  test('parses video aspect ratios and falls back to widescreen', () {
+    expect(
+      StoryMedia.fromJson({
+        'title': 'Portrait video',
+        'slug': 'portrait-video',
+        'aspect_ratio': '9:16',
+      }).aspectRatio,
+      closeTo(9 / 16, 0.001),
+    );
+    expect(
+      StoryMedia.fromJson({
+        'title': 'Measured video',
+        'slug': 'measured-video',
+        'width': 1920,
+        'height': 1080,
+      }).aspectRatio,
+      closeTo(16 / 9, 0.001),
+    );
+    expect(
+      StoryMedia.fromJson({
+        'title': 'Legacy video',
+        'slug': 'legacy-video',
+      }).aspectRatio,
+      closeTo(16 / 9, 0.001),
+    );
+  });
 }

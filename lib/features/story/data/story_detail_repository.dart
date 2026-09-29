@@ -26,17 +26,53 @@ final class StoryMedia {
     required this.slug,
     this.readAlongAvailable = false,
     this.youtubeId,
+    this.aspectRatio = 16 / 9,
   });
   final String title;
   final String slug;
   final bool readAlongAvailable;
   final String? youtubeId;
-  factory StoryMedia.fromJson(Map<String, dynamic> json) => StoryMedia(
-    title: json['title'] as String,
-    slug: json['slug'] as String,
-    readAlongAvailable: json['read_along_available'] as bool? ?? false,
-    youtubeId: json['youtube_id'] as String?,
-  );
+  final double aspectRatio;
+
+  factory StoryMedia.fromJson(Map<String, dynamic> json) {
+    final width = (json['width'] as num?)?.toDouble();
+    final height = (json['height'] as num?)?.toDouble();
+    final rawAspectRatio = json['aspect_ratio'];
+    double? aspectRatio = switch (rawAspectRatio) {
+      num value => value.toDouble(),
+      String value when value.contains(':') => _parseRatio(value),
+      String value => double.tryParse(value),
+      _ => null,
+    };
+    if ((aspectRatio == null || aspectRatio <= 0) &&
+        width != null &&
+        width > 0 &&
+        height != null &&
+        height > 0) {
+      aspectRatio = width / height;
+    }
+
+    return StoryMedia(
+      title: json['title'] as String,
+      slug: json['slug'] as String,
+      readAlongAvailable: json['read_along_available'] as bool? ?? false,
+      youtubeId: json['youtube_id'] as String?,
+      aspectRatio: aspectRatio != null && aspectRatio > 0
+          ? aspectRatio
+          : 16 / 9,
+    );
+  }
+
+  static double? _parseRatio(String value) {
+    final parts = value.split(':');
+    if (parts.length != 2) return null;
+    final width = double.tryParse(parts.first.trim());
+    final height = double.tryParse(parts.last.trim());
+    if (width == null || width <= 0 || height == null || height <= 0) {
+      return null;
+    }
+    return width / height;
+  }
 }
 
 final class StoryAuthor {

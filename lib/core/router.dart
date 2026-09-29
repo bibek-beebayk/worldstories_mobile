@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'main_shell.dart';
+import 'modal_sheet_page.dart';
 import '../features/auth/application/auth_controller.dart';
 import '../features/auth/presentation/account_info_screen.dart';
 import '../features/auth/presentation/auth_loading_screen.dart';
@@ -150,8 +151,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/story/:slug',
-        builder: (context, state) =>
-            StoryDetailScreen(slug: state.pathParameters['slug']!),
+        pageBuilder: (context, state) => ModalSheetPage(
+          key: state.pageKey,
+          showDragHandle: false,
+          child: StoryDetailScreen(slug: state.pathParameters['slug']!),
+        ),
       ),
       GoRoute(
         path: '/discover',

@@ -11,11 +11,50 @@ import '../../auth/application/auth_controller.dart';
 import '../../engagement/data/story_recommendations_repository.dart';
 import '../../story/data/story_detail_repository.dart';
 import '../../../shared/widgets/cached_app_image.dart';
+import '../../../shared/widgets/hero_glow.dart';
 import '../data/home_repository.dart';
+import '../../auth/data/auth_repository.dart';
+import '../../library/data/library_repository.dart';
+import '../../../core/format_icons.dart';
 
 final homeSnapshotProvider = FutureProvider<HomeSnapshot>(
   (ref) => ref.watch(homeRepositoryProvider).fetchHome(),
 );
+
+/// Recommendations for the signed-in reader. A failure just hides the
+/// section rather than breaking the home screen.
+final homeForYouProvider = FutureProvider<List<StorySummary>>((ref) async {
+  // Re-fetch when a different reader signs in.
+  ref.watch(authControllerProvider.select((auth) => auth.value?.username));
+  try {
+    return await ref.watch(libraryRepositoryProvider).fetchRecommendations();
+  } on Object {
+    return const [];
+  }
+});
+
+/// The reader's in-progress stories across every format, most recent first.
+final homeContinueProvider = FutureProvider<List<_ContinueEntry>>((ref) async {
+  // Re-fetch when a different reader signs in.
+  ref.watch(authControllerProvider.select((auth) => auth.value?.username));
+  final repository = ref.watch(libraryRepositoryProvider);
+  Future<List<_ContinueEntry>> load(_ContinueFormat format) async {
+    try {
+      final page = await repository.fetch(format.endpoint);
+      return [
+        for (final item in page.items)
+          if (item.story.slug.isNotEmpty) _ContinueEntry(format, item),
+      ];
+    } on Object {
+      return const [];
+    }
+  }
+
+  final results = await Future.wait(_ContinueFormat.values.map(load));
+  final entries = results.expand((list) => list).toList()
+    ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  return entries.take(10).toList();
+});
 
 Future<void> showSurpriseStoryDialog(BuildContext context) => showDialog<void>(
   context: context,
@@ -29,6 +68,13 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final home = ref.watch(homeSnapshotProvider);
     final user = ref.watch(authControllerProvider).value;
+    final signedIn = user != null;
+    final continueEntries = signedIn
+        ? ref.watch(homeContinueProvider).value ?? const <_ContinueEntry>[]
+        : const <_ContinueEntry>[];
+    final forYou = signedIn
+        ? ref.watch(homeForYouProvider).value ?? const <StorySummary>[]
+        : const <StorySummary>[];
     final content = home.when<List<Widget>>(
       loading: () => const [
         Padding(
@@ -46,7 +92,11 @@ class HomeScreen extends ConsumerWidget {
           ),
         ),
       ],
-      data: _homeSections,
+      data: (snapshot) => _homeSections(
+        snapshot,
+        continueEntries: continueEntries,
+        forYou: forYou,
+      ),
     );
     return Scaffold(
       appBar: AppBar(
@@ -90,12 +140,19 @@ class HomeScreen extends ConsumerWidget {
       ),
       body: SafeArea(
         child: RefreshIndicator(
-          onRefresh: () => ref.refresh(homeSnapshotProvider.future),
+          onRefresh: () => Future.wait([
+            ref.refresh(homeSnapshotProvider.future),
+            if (signedIn) ...[
+              ref.refresh(homeContinueProvider.future),
+              ref.refresh(homeForYouProvider.future),
+            ],
+          ]),
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: EdgeInsets.zero,
             children: [
               _HomeHero(
+                firstName: _firstName(user),
                 stats: home.value?.stats,
                 onStart: () => context.go('/library'),
                 onSurprise: () async {
@@ -445,7 +502,11 @@ class _SurpriseStoryContent extends StatelessWidget {
   }
 }
 
-List<Widget> _homeSections(HomeSnapshot snapshot) {
+List<Widget> _homeSections(
+  HomeSnapshot snapshot, {
+  required List<_ContinueEntry> continueEntries,
+  required List<StorySummary> forYou,
+}) {
   final featured = snapshot.dailyStoryConfigured && snapshot.dailyStory != null
       ? [snapshot.dailyStory!]
       : snapshot.featured;
@@ -453,6 +514,11 @@ List<Widget> _homeSections(HomeSnapshot snapshot) {
       Padding(padding: EdgeInsets.fromLTRB(12, top, 12, bottom), child: child);
 
   return [
+    if (continueEntries.isNotEmpty)
+      Padding(
+        padding: const EdgeInsets.only(top: 32),
+        child: _ContinueRail(entries: continueEntries),
+      ),
     padded(
       _StoryGrid(
         title: snapshot.dailyStoryConfigured
@@ -462,6 +528,13 @@ List<Widget> _homeSections(HomeSnapshot snapshot) {
         stories: featured,
       ),
       top: 32,
+    ),
+    padded(
+      _StoryGrid(
+        title: 'Picked for You',
+        icon: Icons.favorite_border,
+        stories: forYou.take(6).toList(),
+      ),
     ),
     padded(_OriginalsSection(stories: snapshot.originals)),
     const SizedBox(height: 32),
@@ -486,7 +559,7 @@ List<Widget> _homeSections(HomeSnapshot snapshot) {
     padded(
       _StoryGrid(
         title: 'Quick Reads',
-        icon: Icons.bolt,
+        icon: FormatIcons.quickRead,
         stories: snapshot.quickReads.take(6).toList(),
       ),
     ),
@@ -514,10 +587,14 @@ List<Widget> _homeSections(HomeSnapshot snapshot) {
 
 class _HomeHero extends StatelessWidget {
   const _HomeHero({
+    required this.firstName,
     required this.stats,
     required this.onStart,
     required this.onSurprise,
   });
+
+  /// When set, the hero greets the reader instead of pitching the app.
+  final String? firstName;
   final CommunityStats? stats;
   final VoidCallback onStart;
   final VoidCallback onSurprise;
@@ -541,12 +618,12 @@ class _HomeHero extends StatelessWidget {
         const Positioned(
           right: -90,
           top: -105,
-          child: _HeroGlow(size: 280, opacity: 0.14),
+          child: HeroGlow(size: 280, opacity: 0.14),
         ),
         const Positioned(
           left: -115,
           bottom: -155,
-          child: _HeroGlow(size: 310, opacity: 0.08),
+          child: HeroGlow(size: 310, opacity: 0.08),
         ),
         const Positioned(
           right: 10,
@@ -565,46 +642,50 @@ class _HomeHero extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              RichText(
-                text: const TextSpan(
-                  style: TextStyle(
-                    fontSize: 40,
-                    fontFamily: AppTheme.displayFont,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -1.5,
-                  ),
-                  children: [
-                    TextSpan(
-                      text: 'World',
-                      style: TextStyle(color: Colors.white),
+              if (firstName != null)
+                _HeroGreeting(firstName: firstName!)
+              else ...[
+                RichText(
+                  text: const TextSpan(
+                    style: TextStyle(
+                      fontSize: 40,
+                      fontFamily: AppTheme.displayFont,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -1.5,
                     ),
-                    TextSpan(
-                      text: 'Stories',
-                      style: TextStyle(color: AppTheme.primary),
+                    children: [
+                      TextSpan(
+                        text: 'World',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      TextSpan(
+                        text: 'Stories',
+                        style: TextStyle(color: AppTheme.primary),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'The home for stories from around the world. Read novels, poetry, and short fiction for free, and discover audiobooks and read-along narrations.',
+                  style: TextStyle(color: Color(0xBFFFFFFF), height: 1.45),
+                ),
+                const SizedBox(height: 18),
+                const Wrap(
+                  spacing: 20,
+                  runSpacing: 8,
+                  children: [
+                    _HeroFact(
+                      icon: FormatIcons.read,
+                      text: 'Full novels, quick reads & poetry',
+                    ),
+                    _HeroFact(
+                      icon: FormatIcons.listen,
+                      text: 'Audiobooks & read-along narration',
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'The home for stories from around the world. Read novels, poetry, and short fiction for free, and discover audiobooks and read-along narrations.',
-                style: TextStyle(color: Color(0xBFFFFFFF), height: 1.45),
-              ),
-              const SizedBox(height: 18),
-              const Wrap(
-                spacing: 20,
-                runSpacing: 8,
-                children: [
-                  _HeroFact(
-                    icon: Icons.menu_book,
-                    text: 'Full novels, quick reads & poetry',
-                  ),
-                  _HeroFact(
-                    icon: Icons.headphones,
-                    text: 'Audiobooks & read-along narration',
-                  ),
-                ],
-              ),
+              ],
               if (stats != null) ...[
                 const SizedBox(height: 18),
                 Text(
@@ -640,23 +721,6 @@ class _HomeHero extends StatelessWidget {
           ),
         ),
       ],
-    ),
-  );
-}
-
-class _HeroGlow extends StatelessWidget {
-  const _HeroGlow({required this.size, required this.opacity});
-
-  final double size;
-  final double opacity;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      color: AppTheme.primary.withValues(alpha: opacity),
     ),
   );
 }
@@ -1006,4 +1070,253 @@ class _ErrorCard extends StatelessWidget {
       ),
     ),
   );
+}
+
+String? _firstName(UserProfile? user) {
+  if (user == null) return null;
+  final name = (user.displayName?.trim().isNotEmpty ?? false)
+      ? user.displayName!.trim().split(RegExp(r'\s+')).first
+      : user.username.trim();
+  return name.isEmpty ? null : name;
+}
+
+class _HeroGreeting extends StatelessWidget {
+  const _HeroGreeting({required this.firstName});
+
+  final String firstName;
+
+  String get _timeOfDay {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        '$_timeOfDay,',
+        style: const TextStyle(color: Color(0xBFFFFFFF), fontSize: 18),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        firstName,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: AppTheme.primary,
+          fontSize: 40,
+          fontFamily: AppTheme.displayFont,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -1.5,
+        ),
+      ),
+      const SizedBox(height: 12),
+      const Text(
+        'Pick up where you left off, or find a new story from somewhere in the world.',
+        style: TextStyle(color: Color(0xBFFFFFFF), height: 1.45),
+      ),
+    ],
+  );
+}
+
+enum _ContinueFormat {
+  reading('continue-reading', 'Reading', FormatIcons.read, FormatColors.read),
+  listening(
+    'continue-listening',
+    'Listening',
+    FormatIcons.listen,
+    FormatColors.listen,
+  ),
+  watching(
+    'continue-watching',
+    'Watching',
+    FormatIcons.watch,
+    FormatColors.watch,
+  );
+
+  const _ContinueFormat(this.endpoint, this.label, this.icon, this.color);
+
+  final String endpoint;
+  final String label;
+  final IconData icon;
+  final Color color;
+}
+
+final class _ContinueEntry {
+  const _ContinueEntry(this.format, this.item);
+
+  final _ContinueFormat format;
+  final LibraryItem item;
+
+  StorySummary get story => item.story;
+
+  DateTime get updatedAt =>
+      DateTime.tryParse(item.raw['updated_at'] as String? ?? '') ??
+      DateTime.fromMillisecondsSinceEpoch(0);
+
+  String? get partTitle => switch (format) {
+    _ContinueFormat.reading => item.chapterTitle,
+    _ContinueFormat.listening => item.audioTitle,
+    _ContinueFormat.watching => item.videoTitle,
+  };
+
+  /// Resumes the exact chapter/audio/video when the API names one,
+  /// otherwise opens the story sheet.
+  String get route {
+    final slug = story.slug;
+    final part = switch (format) {
+      _ContinueFormat.reading => item.raw['chapter_slug'],
+      _ContinueFormat.listening => item.raw['audio_slug'],
+      _ContinueFormat.watching => item.raw['video_slug'],
+    };
+    if (part is! String || part.isEmpty) return '/story/$slug';
+    return switch (format) {
+      _ContinueFormat.reading => '/read/$slug/$part',
+      _ContinueFormat.listening => '/listen/$slug/$part',
+      _ContinueFormat.watching => '/watch/$slug/$part',
+    };
+  }
+}
+
+/// "Continue where you left off": the reader's latest unfinished stories
+/// across reading, listening and watching, color coded by format.
+class _ContinueRail extends StatelessWidget {
+  const _ContinueRail({required this.entries});
+
+  final List<_ContinueEntry> entries;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(
+          children: [
+            const Icon(Icons.history, size: 22, color: AppTheme.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Continue Where You Left Off',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 16),
+      SizedBox(
+        height: 128,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          itemCount: entries.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 12),
+          itemBuilder: (context, index) => _ContinueCard(entry: entries[index]),
+        ),
+      ),
+    ],
+  );
+}
+
+class _ContinueCard extends StatelessWidget {
+  const _ContinueCard({required this.entry});
+
+  final _ContinueEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final format = entry.format;
+    final progress = entry.item.overallProgress?.clamp(0.0, 1.0);
+    final remaining = entry.item.remainingMinutes;
+    final textTheme = Theme.of(context).textTheme;
+    return SizedBox(
+      width: 280,
+      child: Material(
+        color: format.color.withValues(alpha: 0.07),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTheme.radius),
+          side: BorderSide(color: format.color.withValues(alpha: 0.25)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => context.push(entry.route),
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Row(
+              children: [
+                AspectRatio(
+                  aspectRatio: 3 / 4,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: _StoryCover(story: entry.story),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(format.icon, size: 15, color: format.color),
+                          const SizedBox(width: 5),
+                          Text(
+                            format.label,
+                            style: textTheme.labelMedium?.copyWith(
+                              color: format.color,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        entry.story.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.titleSmall,
+                      ),
+                      if (entry.partTitle != null)
+                        Text(
+                          entry.partTitle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.bodySmall,
+                        ),
+                      const Spacer(),
+                      if (progress != null) ...[
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: progress,
+                            minHeight: 4,
+                            color: format.color,
+                            backgroundColor: format.color.withValues(
+                              alpha: 0.15,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          [
+                            '${(progress * 100).round()}%',
+                            if (remaining != null) '$remaining min left',
+                          ].join(' • '),
+                          style: textTheme.bodySmall,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
