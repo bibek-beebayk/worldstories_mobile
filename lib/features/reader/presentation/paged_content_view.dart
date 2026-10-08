@@ -3,27 +3,36 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
-/// Shows [child] (a tall column of rendered text) as horizontally swiped
-/// pages, for the reader's page view.
+import '../../../shared/widgets/quick_page_physics.dart';
+
+/// Shows [children] (the blocks of a section — paragraphs, headings,
+/// images — stacked top to bottom) as horizontally swiped pages, for the
+/// reader's page view.
 ///
-/// Rather than re-implementing text layout, [child] is laid out once
-/// off-screen at the page width, and every line box and image in it is
-/// measured. Page breaks are then placed between lines — never through one —
-/// and each page shows its slice of that same layout, clipped. Any content
-/// the scroll view can render therefore paginates identically, keeping all
-/// HTML styling.
+/// Rather than re-implementing text layout, the blocks are laid out once
+/// off-screen at the page width, and every line box and image in them is
+/// measured. Page breaks are then placed between lines — never through one.
+/// Each page then builds only the blocks that appear on it, positioned
+/// exactly as measured and clipped to the page, so turning a page costs a
+/// page's worth of layout rather than the whole section's.
 class PagedContentView extends StatefulWidget {
   const PagedContentView({
     super.key,
-    required this.child,
+    required this.children,
     required this.padding,
     required this.onProgress,
+    this.layoutKey,
     this.maxWidth = 720,
     this.pinching = false,
     this.initialFraction = 0,
   });
 
-  final Widget child;
+  final List<Widget> children;
+
+  /// Changes whenever the blocks' layout may change (text size, font,
+  /// section), telling the view to re-measure. Other rebuilds (theme,
+  /// chrome) skip the measuring.
+  final Object? layoutKey;
 
   /// Space around each page's text (e.g. clear of the floating reader bars).
   final EdgeInsets padding;
@@ -46,11 +55,18 @@ typedef _Slice = ({double top, double bottom});
 
 class PagedContentViewState extends State<PagedContentView> {
   final _measureKey = GlobalKey();
+  List<GlobalKey> _blockKeys = const [];
   final _controller = PageController();
+  final _swipe = PageSwipeTracker();
   List<_Slice> _pages = const [];
+
+  /// Each block's measured vertical extent, in content coordinates.
+  List<_Slice> _blocks = const [];
   int _current = 0;
   double? _pendingFraction;
   double _pageHeight = 0;
+  double _width = 0;
+  Object? _measuredFor;
   bool _paginationScheduled = false;
 
   @override
@@ -91,8 +107,25 @@ class PagedContentViewState extends State<PagedContentView> {
 
   /// Opens the page at [fraction] of the content, once pages are known.
   void jumpToFraction(double fraction) {
-    _pendingFraction = fraction.clamp(0.0, 1.0);
-    _schedulePagination();
+    final clamped = fraction.clamp(0.0, 1.0);
+    if (_pages.isEmpty) {
+      _pendingFraction = clamped;
+      return;
+    }
+    _goTo((clamped * (_pages.length - 1)).round());
+  }
+
+  void _goTo(int page) {
+    final target = page.clamp(0, math.max(0, _pages.length - 1)).toInt();
+    if (_current != target) setState(() => _current = target);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_controller.hasClients && _controller.page?.round() != target) {
+        _controller.jumpToPage(target);
+      }
+      widget.onProgress(_fractionOf(target));
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void _schedulePagination() {
@@ -102,8 +135,7 @@ class PagedContentViewState extends State<PagedContentView> {
       _paginationScheduled = false;
       if (mounted) _paginate();
     });
-    // A post-frame callback alone doesn't cause a frame (e.g. a restore
-    // arriving while the page is idle), so ask for one.
+    // A post-frame callback alone doesn't cause a frame, so ask for one.
     WidgetsBinding.instance.ensureVisualUpdate();
   }
 
@@ -111,36 +143,29 @@ class PagedContentViewState extends State<PagedContentView> {
     final root = _measureKey.currentContext?.findRenderObject();
     if (root is! RenderBox || !root.hasSize || _pageHeight <= 0) return;
     final pages = _computePages(root, _pageHeight);
-    final changed =
-        pages.length != _pages.length ||
-        pages.indexed.any(
-          (entry) =>
-              (entry.$2.top - _pages[entry.$1].top).abs() > 0.5 ||
-              (entry.$2.bottom - _pages[entry.$1].bottom).abs() > 0.5,
-        );
-    if (!changed && _pendingFraction == null) return;
-
+    final blocks = [
+      for (final key in _blockKeys)
+        switch (key.currentContext?.findRenderObject()) {
+          final RenderBox box when box.hasSize => (
+            top: box.localToGlobal(Offset.zero, ancestor: root).dy,
+            bottom:
+                box.localToGlobal(Offset.zero, ancestor: root).dy +
+                box.size.height,
+          ),
+          _ => (top: 0.0, bottom: 0.0),
+        },
+    ];
     // Keep the reader at the same point through a re-layout (text size,
     // font or rotation change), or go where we were asked to.
     final fraction =
         _pendingFraction ??
         (_pages.length <= 1 ? 0.0 : _current / (_pages.length - 1));
     _pendingFraction = null;
-    final target = (fraction * (pages.length - 1)).round().clamp(
-      0,
-      pages.length - 1,
-    );
     setState(() {
       _pages = pages;
-      _current = target;
+      _blocks = blocks;
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (_controller.hasClients && _controller.page?.round() != target) {
-        _controller.jumpToPage(target);
-      }
-      widget.onProgress(_fractionOf(target));
-    });
+    _goTo((fraction * (pages.length - 1)).round());
   }
 
   /// Unbreakable vertical bands (text lines, images) in [root]'s layout,
@@ -230,6 +255,24 @@ class PagedContentViewState extends State<PagedContentView> {
     return pages;
   }
 
+  Widget _page(_Slice slice) => SizedBox(
+    width: _width,
+    height: slice.bottom - slice.top,
+    child: Stack(
+      clipBehavior: Clip.hardEdge,
+      children: [
+        for (var i = 0; i < _blocks.length && i < widget.children.length; i++)
+          if (_blocks[i].bottom > slice.top && _blocks[i].top < slice.bottom)
+            Positioned(
+              top: _blocks[i].top - slice.top,
+              left: 0,
+              width: _width,
+              child: widget.children[i],
+            ),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -238,9 +281,22 @@ class PagedContentViewState extends State<PagedContentView> {
         constraints.maxWidth - widget.padding.horizontal,
       );
       final pageHeight = constraints.maxHeight - widget.padding.vertical;
-      if (pageHeight != _pageHeight) _pageHeight = pageHeight;
-      // Re-measure after every rebuild; it's a no-op when nothing moved.
-      _schedulePagination();
+      if (_blockKeys.length != widget.children.length) {
+        _blockKeys = [for (final _ in widget.children) GlobalKey()];
+      }
+      // Re-measure only when something that moves text changed.
+      final measureFor = (
+        widget.layoutKey,
+        width,
+        pageHeight,
+        widget.children.length,
+      );
+      if (measureFor != _measuredFor) {
+        _measuredFor = measureFor;
+        _width = width;
+        _pageHeight = pageHeight;
+        _schedulePagination();
+      }
       return Stack(
         fit: StackFit.expand,
         children: [
@@ -261,55 +317,59 @@ class PagedContentViewState extends State<PagedContentView> {
                 child: SizeChangedLayoutNotifier(
                   // Hidden copy: keep it out of text selection.
                   child: SelectionContainer.disabled(
-                    child: KeyedSubtree(key: _measureKey, child: widget.child),
+                    child: Column(
+                      key: _measureKey,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (var i = 0; i < widget.children.length; i++)
+                          KeyedSubtree(
+                            key: _blockKeys[i],
+                            child: widget.children[i],
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-          PageView.builder(
-            controller: _controller,
-            physics: widget.pinching
-                ? const NeverScrollableScrollPhysics()
-                // Always scrollable so a one-page chapter can still be
-                // swiped past its ends (see the reader's chapter hand-off).
-                : const PageScrollPhysics(
-                    parent: AlwaysScrollableScrollPhysics(),
-                  ),
-            itemCount: _pages.length,
-            onPageChanged: (page) {
-              _current = page;
-              widget.onProgress(_fractionOf(page));
+          NotificationListener<ScrollStartNotification>(
+            onNotification: (notification) {
+              if (notification.dragDetails != null) {
+                _swipe.originPage = _controller.page?.round() ?? _current;
+              }
+              return false;
             },
-            itemBuilder: (context, index) {
-              final slice = _pages[index];
-              return Padding(
+            child: PageView.builder(
+              controller: _controller,
+              // Same quick swipe as the story list: a short drag or a light
+              // flick turns the page.
+              pageSnapping: false,
+              physics: widget.pinching
+                  ? const NeverScrollableScrollPhysics()
+                  // Always scrollable so a one-page section can still be
+                  // swiped past its ends (see the reader's section hand-off).
+                  : QuickPageScrollPhysics(
+                      tracker: _swipe,
+                      parent: const AlwaysScrollableScrollPhysics(),
+                    ),
+              itemCount: _pages.length,
+              onPageChanged: (page) {
+                _current = page;
+                widget.onProgress(_fractionOf(page));
+              },
+              itemBuilder: (context, index) => Padding(
                 padding: EdgeInsets.only(
                   top: widget.padding.top,
                   bottom: widget.padding.bottom,
                 ),
                 child: Align(
                   alignment: Alignment.topCenter,
-                  child: SizedBox(
-                    width: width,
-                    height: slice.bottom - slice.top,
-                    child: ClipRect(
-                      child: OverflowBox(
-                        alignment: Alignment.topLeft,
-                        minWidth: width,
-                        maxWidth: width,
-                        minHeight: 0,
-                        maxHeight: double.infinity,
-                        child: Transform.translate(
-                          offset: Offset(0, -slice.top),
-                          child: widget.child,
-                        ),
-                      ),
-                    ),
-                  ),
+                  // Each page paints once and is then cached while it slides.
+                  child: RepaintBoundary(child: _page(_pages[index])),
                 ),
-              );
-            },
+              ),
+            ),
           ),
         ],
       );

@@ -6,6 +6,7 @@ import '../../../core/api_error_view.dart';
 import '../../../core/app_theme.dart';
 import '../../../core/providers.dart';
 import '../../../shared/widgets/cached_app_image.dart';
+import '../../../shared/widgets/quick_page_physics.dart';
 import '../../home/data/home_repository.dart';
 import '../data/catalogue_repository.dart';
 import '../../../core/format_icons.dart';
@@ -37,58 +38,6 @@ extension on _LibraryMode {
   };
 }
 
-class _PageSwipeTracker {
-  int originPage = 0;
-}
-
-class _QuickPageScrollPhysics extends ScrollPhysics {
-  const _QuickPageScrollPhysics({required this.tracker, super.parent});
-
-  static const dragThreshold = 0.08;
-  static const flingVelocity = 30.0;
-  final _PageSwipeTracker tracker;
-
-  @override
-  _QuickPageScrollPhysics applyTo(ScrollPhysics? ancestor) =>
-      _QuickPageScrollPhysics(tracker: tracker, parent: buildParent(ancestor));
-
-  @override
-  Simulation? createBallisticSimulation(
-    ScrollMetrics position,
-    double velocity,
-  ) {
-    if ((velocity <= 0 && position.pixels <= position.minScrollExtent) ||
-        (velocity >= 0 && position.pixels >= position.maxScrollExtent)) {
-      return super.createBallisticSimulation(position, velocity);
-    }
-
-    final visiblePage = position.pixels / position.viewportDimension;
-    final displacement = visiblePage - tracker.originPage;
-    var targetPage = tracker.originPage;
-    if (displacement.abs() >= dragThreshold) {
-      targetPage += displacement.isNegative ? -1 : 1;
-    } else if (velocity.abs() >= flingVelocity) {
-      targetPage += velocity.isNegative ? -1 : 1;
-    }
-
-    final lastPage = (position.maxScrollExtent / position.viewportDimension)
-        .round();
-    targetPage = targetPage.clamp(0, lastPage);
-    final targetPixels = targetPage * position.viewportDimension;
-    final tolerance = toleranceFor(position);
-    if ((targetPixels - position.pixels).abs() <= tolerance.distance) {
-      return null;
-    }
-    return ScrollSpringSimulation(
-      spring,
-      position.pixels,
-      targetPixels,
-      velocity,
-      tolerance: tolerance,
-    );
-  }
-}
-
 class CatalogueScreen extends ConsumerStatefulWidget {
   const CatalogueScreen({super.key, this.initialMoodSlugs = ''});
 
@@ -102,7 +51,7 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
   static const _storiesPerPage = 9;
   final search = TextEditingController();
   final pageController = PageController();
-  final pageSwipeTracker = _PageSwipeTracker();
+  final pageSwipeTracker = PageSwipeTracker();
   final stories = <StorySummary>[];
   bool searchVisible = false;
   bool initialLoading = true;
@@ -438,7 +387,7 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
                         child: PageView.builder(
                           controller: pageController,
                           pageSnapping: false,
-                          physics: _QuickPageScrollPhysics(
+                          physics: QuickPageScrollPhysics(
                             tracker: pageSwipeTracker,
                           ),
                           itemCount: uiPageCount,

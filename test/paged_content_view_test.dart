@@ -18,19 +18,16 @@ void main() {
               key: key,
               padding: const EdgeInsets.all(20),
               onProgress: progress.add,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (var i = 0; i < 40; i++)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: Text(
-                        'Paragraph $i. ${'Lorem ipsum dolor sit amet. ' * 6}',
-                        style: const TextStyle(fontSize: 16, height: 1.5),
-                      ),
+              children: [
+                for (var i = 0; i < 40; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      'Paragraph $i. ${'Lorem ipsum dolor sit amet. ' * 6}',
+                      style: const TextStyle(fontSize: 16, height: 1.5),
                     ),
-                ],
-              ),
+                  ),
+              ],
             ),
           ),
         ),
@@ -39,8 +36,19 @@ void main() {
     await tester.pumpAndSettle();
 
     final state = key.currentState!;
+    // Only the blocks on the visible page are built on-screen.
+    expect(find.textContaining('Paragraph 0.'), findsOneWidget);
+    expect(find.textContaining('Paragraph 39.'), findsNothing);
     expect(state.pageCount, greaterThan(3));
     expect(progress.last, 0);
+
+    // A short drag (about an eighth of the page) is enough to turn it.
+    await tester.drag(find.byType(PageView), const Offset(-50, 0));
+    await tester.pumpAndSettle();
+    expect(state.currentPage, 1);
+    await tester.drag(find.byType(PageView), const Offset(50, 0));
+    await tester.pumpAndSettle();
+    expect(state.currentPage, 0);
 
     state.nextPage();
     await tester.pumpAndSettle();
@@ -64,7 +72,7 @@ void main() {
             key: key,
             padding: EdgeInsets.zero,
             onProgress: (_) {},
-            child: const Text('Just one line.'),
+            children: const [Text('Just one line.')],
           ),
         ),
       ),

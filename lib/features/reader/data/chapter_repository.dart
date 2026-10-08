@@ -1,8 +1,11 @@
+import 'dart:isolate';
+
 import 'package:dio/dio.dart';
 import 'package:html/parser.dart' as html_parser;
 
 import '../../../core/api_client.dart';
 import '../../../core/api_exception.dart';
+import 'html_blocks.dart';
 
 final class ChapterContent {
   const ChapterContent({
@@ -19,6 +22,11 @@ final class ChapterContent {
   final String html;
 
   static final _startsWithTitleCache = Expando<bool>();
+  static final _blocksCache = Expando<List<String>>();
+
+  /// [html] split into paragraph-level blocks (see [splitHtmlBlocks]),
+  /// computed once per chapter.
+  List<String> get blocks => _blocksCache[this] ??= splitHtmlBlocks(html);
 
   /// Whether [html] already opens with the chapter title as a heading (most
   /// chapters do), so the reader shouldn't print the title again. Worked out
@@ -62,7 +70,21 @@ final class ChapterRepository {
         'stories/${Uri.encodeComponent(storySlug)}/chapters/${Uri.encodeComponent(chapterSlug)}/',
         queryParameters: {'type': 'text'},
       );
-      return ChapterContent.fromJson(response.data!);
+      final chapter = ChapterContent.fromJson(response.data!);
+      // Parse the HTML off the UI thread, so a chapter (including one
+      // prefetched while the reader finishes the previous one) arrives
+      // ready to render without a stall.
+      final html = chapter.html;
+      final title = chapter.title;
+      final prepared = await Isolate.run(
+        () => (
+          blocks: splitHtmlBlocks(html),
+          startsWithTitle: ChapterContent._startsWithTitle(html, title),
+        ),
+      );
+      ChapterContent._blocksCache[chapter] = prepared.blocks;
+      ChapterContent._startsWithTitleCache[chapter] = prepared.startsWithTitle;
+      return chapter;
     } on DioException catch (error) {
       throw ApiException.fromDio(error);
     }
