@@ -13,9 +13,13 @@ import '../../story/data/story_detail_repository.dart';
 import '../../../shared/widgets/cached_app_image.dart';
 import '../../../shared/widgets/hero_glow.dart';
 import '../data/home_repository.dart';
-import '../../auth/data/auth_repository.dart';
 import '../../library/data/library_repository.dart';
 import '../../../core/format_icons.dart';
+import '../../blog/data/blog_repository.dart';
+import '../../watch/data/watch_repository.dart';
+import '../../watch/presentation/video_card.dart';
+
+part 'home_sections.dart';
 
 final homeSnapshotProvider = FutureProvider<HomeSnapshot>(
   (ref) => ref.watch(homeRepositoryProvider).fetchHome(),
@@ -75,6 +79,13 @@ class HomeScreen extends ConsumerWidget {
     final forYou = signedIn
         ? ref.watch(homeForYouProvider).value ?? const <StorySummary>[]
         : const <StorySummary>[];
+    Future<void> surprise() async {
+      ref
+          .read(analyticsServiceProvider)
+          .track(AnalyticsEventType.surpriseMeClicked);
+      await showSurpriseStoryDialog(context);
+    }
+
     final content = home.when<List<Widget>>(
       loading: () => const [
         Padding(
@@ -94,8 +105,10 @@ class HomeScreen extends ConsumerWidget {
       ],
       data: (snapshot) => _homeSections(
         snapshot,
+        signedIn: signedIn,
         continueEntries: continueEntries,
         forYou: forYou,
+        onSurprise: surprise,
       ),
     );
     return Scaffold(
@@ -112,6 +125,11 @@ class HomeScreen extends ConsumerWidget {
           ),
         ),
         actions: [
+          IconButton(
+            onPressed: surprise,
+            icon: const Icon(Icons.shuffle),
+            tooltip: 'Surprise Me',
+          ),
           IconButton(
             onPressed: () => context.push('/search'),
             icon: const Icon(Icons.search),
@@ -151,17 +169,7 @@ class HomeScreen extends ConsumerWidget {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: EdgeInsets.zero,
             children: [
-              _HomeHero(
-                firstName: _firstName(user),
-                stats: home.value?.stats,
-                onStart: () => context.go('/library'),
-                onSurprise: () async {
-                  ref
-                      .read(analyticsServiceProvider)
-                      .track(AnalyticsEventType.surpriseMeClicked);
-                  await showSurpriseStoryDialog(context);
-                },
-              ),
+              _SurpriseCard(onTap: surprise),
               ...content,
             ],
           ),
@@ -502,286 +510,88 @@ class _SurpriseStoryContent extends StatelessWidget {
   }
 }
 
-List<Widget> _homeSections(
-  HomeSnapshot snapshot, {
-  required List<_ContinueEntry> continueEntries,
-  required List<StorySummary> forYou,
-}) {
-  final featured = snapshot.dailyStoryConfigured && snapshot.dailyStory != null
-      ? [snapshot.dailyStory!]
-      : snapshot.featured;
-  Widget padded(Widget child, {double top = 0, double bottom = 0}) =>
-      Padding(padding: EdgeInsets.fromLTRB(12, top, 12, bottom), child: child);
-
-  return [
-    if (continueEntries.isNotEmpty)
-      Padding(
-        padding: const EdgeInsets.only(top: 32),
-        child: _ContinueRail(entries: continueEntries),
-      ),
-    padded(
-      _StoryGrid(
-        title: snapshot.dailyStoryConfigured
-            ? 'Daily Story'
-            : 'Featured Stories',
-        icon: Icons.auto_awesome,
-        stories: featured,
-      ),
-      top: 32,
-    ),
-    padded(
-      _StoryGrid(
-        title: 'Picked for You',
-        icon: Icons.favorite_border,
-        stories: forYou.take(6).toList(),
-      ),
-    ),
-    padded(_OriginalsSection(stories: snapshot.originals)),
-    const SizedBox(height: 32),
-    padded(
-      _StoryGrid(
-        title: 'New Entries',
-        icon: Icons.rss_feed,
-        stories: snapshot.newTrending.take(4).toList(),
-      ),
-    ),
-    padded(
-      const _PromoBanner(
-        colors: [Color(0xFF7C3AED), Color(0xFF9333EA), Color(0xFF4F46E5)],
-        icon: Icons.route,
-        title: 'Story Journeys',
-        description: 'Curated paths through countries, genres, and themes.',
-        action: 'Explore journeys',
-        route: '/journeys',
-      ),
-    ),
-    const SizedBox(height: 32),
-    padded(
-      _StoryGrid(
-        title: 'Quick Reads',
-        icon: FormatIcons.quickRead,
-        stories: snapshot.quickReads.take(6).toList(),
-      ),
-    ),
-    padded(
-      const _PromoBanner(
-        colors: [Color(0xFF0891B2), Color(0xFF2563EB), Color(0xFF0D9488)],
-        icon: Icons.public,
-        title: 'Explore by Country',
-        description: 'Follow a story back to where it comes from.',
-        action: 'Open the Story Map',
-        route: '/story-map',
-      ),
-    ),
-    const SizedBox(height: 32),
-    padded(
-      _StoryGrid(
-        title: 'Continue Discovering',
-        icon: Icons.explore,
-        stories: snapshot.moreToExplore.take(6).toList(),
-      ),
-      bottom: 40,
-    ),
-  ];
-}
-
-class _HomeHero extends StatelessWidget {
-  const _HomeHero({
-    required this.firstName,
-    required this.stats,
-    required this.onStart,
-    required this.onSurprise,
-  });
-
-  /// When set, the hero greets the reader instead of pitching the app.
-  final String? firstName;
-  final CommunityStats? stats;
-  final VoidCallback onStart;
-  final VoidCallback onSurprise;
+class _SurpriseCard extends StatelessWidget {
+  const _SurpriseCard({required this.onTap});
+  final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Container(
-    clipBehavior: Clip.hardEdge,
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(
-        colors: [
-          AppTheme.heroDark,
-          AppTheme.heroGradientEnd,
-          Color(0xFF35202D),
-        ],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ),
-    ),
-    child: Stack(
-      children: [
-        const Positioned(
-          right: -90,
-          top: -105,
-          child: HeroGlow(size: 280, opacity: 0.14),
-        ),
-        const Positioned(
-          left: -115,
-          bottom: -155,
-          child: HeroGlow(size: 310, opacity: 0.08),
-        ),
-        const Positioned(
-          right: 10,
-          top: 78,
-          child: Opacity(
-            opacity: 0.08,
-            child: Icon(
-              Icons.auto_stories_rounded,
-              color: Colors.white,
-              size: 130,
-            ),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 20),
+    child: Material(
+      color: Colors.transparent,
+      child: Ink(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.zero,
+          gradient: const LinearGradient(
+            colors: [
+              AppTheme.heroDark,
+              AppTheme.heroGradientEnd,
+              Color(0xFF35202D),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 36, 16, 38),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (firstName != null)
-                _HeroGreeting(firstName: firstName!)
-              else ...[
-                RichText(
-                  text: const TextSpan(
-                    style: TextStyle(
-                      fontSize: 40,
-                      fontFamily: AppTheme.displayFont,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -1.5,
-                    ),
+        child: InkWell(
+          borderRadius: BorderRadius.zero,
+          onTap: onTap,
+          child: ClipRRect(
+            borderRadius: BorderRadius.zero,
+            child: Stack(
+              children: [
+                const Positioned(
+                  right: -40,
+                  top: -60,
+                  child: HeroGlow(size: 160, opacity: 0.16),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  child: Row(
                     children: [
-                      TextSpan(
-                        text: 'World',
-                        style: TextStyle(color: Colors.white),
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: AppTheme.primary,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.shuffle, color: Colors.white),
                       ),
-                      TextSpan(
-                        text: 'Stories',
-                        style: TextStyle(color: AppTheme.primary),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Surprise Me',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              'Not sure what to read? Let us pick a story.',
+                              style: TextStyle(
+                                color: Color(0xBFFFFFFF),
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                      const Icon(Icons.chevron_right, color: Colors.white70),
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
-                const Text(
-                  'The home for stories from around the world. Read novels, poetry, and short fiction for free, and discover audiobooks and read-along narrations.',
-                  style: TextStyle(color: Color(0xBFFFFFFF), height: 1.45),
-                ),
-                const SizedBox(height: 18),
-                const Wrap(
-                  spacing: 20,
-                  runSpacing: 8,
-                  children: [
-                    _HeroFact(
-                      icon: FormatIcons.read,
-                      text: 'Full novels, quick reads & poetry',
-                    ),
-                    _HeroFact(
-                      icon: FormatIcons.listen,
-                      text: 'Audiobooks & read-along narration',
-                    ),
-                  ],
-                ),
               ],
-              if (stats != null) ...[
-                const SizedBox(height: 18),
-                Text(
-                  '${stats!.stories} stories   ${stats!.creators} creators   ${stats!.readers} readers',
-                  style: const TextStyle(
-                    color: Color(0xBFFFFFFF),
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 24),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  FilledButton.icon(
-                    onPressed: onStart,
-                    icon: const Icon(Icons.arrow_forward),
-                    label: const Text('Start Reading'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: onSurprise,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.white70),
-                    ),
-                    icon: const Icon(Icons.shuffle),
-                    label: const Text('Surprise Me'),
-                  ),
-                ],
-              ),
-            ],
+            ),
           ),
         ),
-      ],
+      ),
     ),
   );
-}
-
-class _HeroFact extends StatelessWidget {
-  const _HeroFact({required this.icon, required this.text});
-  final IconData icon;
-  final String text;
-  @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Icon(icon, size: 16, color: Colors.white70),
-      const SizedBox(width: 6),
-      Text(text, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-    ],
-  );
-}
-
-class _StoryGrid extends StatelessWidget {
-  const _StoryGrid({
-    required this.title,
-    required this.icon,
-    required this.stories,
-  });
-  final String title;
-  final IconData icon;
-  final List<StorySummary> stories;
-  @override
-  Widget build(BuildContext context) {
-    if (stories.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 22, color: AppTheme.primary),
-              const SizedBox(width: 10),
-              Text(title, style: Theme.of(context).textTheme.titleLarge),
-            ],
-          ),
-          const SizedBox(height: 20),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: stories.length,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 18,
-              childAspectRatio: .58,
-            ),
-            itemBuilder: (context, index) =>
-                _GridStoryCard(story: stories[index]),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _GridStoryCard extends StatelessWidget {
@@ -920,15 +730,15 @@ class _PromoBanner extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.description,
-    required this.action,
-    required this.route,
+    this.action,
+    this.route,
   });
   final List<Color> colors;
   final IconData icon;
   final String title;
   final String description;
-  final String action;
-  final String route;
+  final String? action;
+  final String? route;
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(20),
@@ -976,23 +786,35 @@ class _PromoBanner extends StatelessWidget {
             ),
           ],
         ),
+        if (action != null && route != null) ...[
         const SizedBox(height: 16),
         FilledButton.tonal(
-          onPressed: () => context.push(route),
+          onPressed: () => context.push(route!),
           style: FilledButton.styleFrom(
             backgroundColor: Colors.white24,
             foregroundColor: Colors.white,
           ),
-          child: Text(action),
+          child: Text(action!),
         ),
+        ],
       ],
     ),
   );
 }
 
 class _OriginalsSection extends StatelessWidget {
-  const _OriginalsSection({required this.stories});
+  const _OriginalsSection({
+    required this.stories,
+    this.title = '',
+    this.description = '',
+    this.seeAllUrl = '',
+    this.seeAllLabel = 'See all',
+  });
   final List<StorySummary> stories;
+  final String title;
+  final String description;
+  final String seeAllUrl;
+  final String seeAllLabel;
   @override
   Widget build(BuildContext context) {
     if (stories.isEmpty) return const SizedBox.shrink();
@@ -1003,7 +825,7 @@ class _OriginalsSection extends StatelessWidget {
           colors: [Color(0xFFEEF2FF), Colors.white, Color(0xFFEFF6FF)],
         ),
         border: Border.all(color: const Color(0xFFC7D2FE)),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.zero,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1014,8 +836,8 @@ class _OriginalsSection extends StatelessWidget {
               color: const Color(0xFF4F46E5),
               borderRadius: BorderRadius.circular(999),
             ),
-            child: const Text(
-              '✦  WORLDSTORIES ORIGINALS',
+            child: Text(
+              title.isEmpty ? '✦  WORLDSTORIES ORIGINALS' : '✦  ${title.toUpperCase()}',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 11,
@@ -1025,15 +847,17 @@ class _OriginalsSection extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
-          const Text(
-            'Exclusive stories published in-house for the WorldStories community.',
-            style: TextStyle(color: AppTheme.mutedForeground, fontSize: 12),
+          Text(
+            description.isEmpty
+                ? 'Exclusive stories published in-house for the WorldStories community.'
+                : description,
+            style: const TextStyle(color: AppTheme.mutedForeground, fontSize: 12),
           ),
           const SizedBox(height: 16),
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: stories.take(6).length,
+            itemCount: stories.length,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
               crossAxisSpacing: 12,
@@ -1043,6 +867,16 @@ class _OriginalsSection extends StatelessWidget {
             itemBuilder: (context, index) =>
                 _GridStoryCard(story: stories[index]),
           ),
+          if (_mobileRoute(seeAllUrl) case final route?) ...[
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: _SeeAllPill(
+                label: seeAllLabel,
+                onTap: () => context.push(route),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1080,56 +914,6 @@ class _ErrorCard extends StatelessWidget {
         ],
       ),
     ),
-  );
-}
-
-String? _firstName(UserProfile? user) {
-  if (user == null) return null;
-  final name = (user.displayName?.trim().isNotEmpty ?? false)
-      ? user.displayName!.trim().split(RegExp(r'\s+')).first
-      : user.username.trim();
-  return name.isEmpty ? null : name;
-}
-
-class _HeroGreeting extends StatelessWidget {
-  const _HeroGreeting({required this.firstName});
-
-  final String firstName;
-
-  String get _timeOfDay {
-    final hour = DateTime.now().hour;
-    if (hour < 12) return 'Good morning';
-    if (hour < 17) return 'Good afternoon';
-    return 'Good evening';
-  }
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        '$_timeOfDay,',
-        style: const TextStyle(color: Color(0xBFFFFFFF), fontSize: 18),
-      ),
-      const SizedBox(height: 4),
-      Text(
-        firstName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          color: AppTheme.primary,
-          fontSize: 40,
-          fontFamily: AppTheme.displayFont,
-          fontWeight: FontWeight.w800,
-          letterSpacing: -1.5,
-        ),
-      ),
-      const SizedBox(height: 12),
-      const Text(
-        'Pick up where you left off, or find a new story from somewhere in the world.',
-        style: TextStyle(color: Color(0xBFFFFFFF), height: 1.45),
-      ),
-    ],
   );
 }
 
@@ -1178,16 +962,22 @@ final class _ContinueEntry {
   /// otherwise opens the story sheet.
   String get route {
     final slug = story.slug;
+    if (format == _ContinueFormat.watching) {
+      // Videos are standalone now; link straight to one only when the API
+      // names its id, otherwise fall back to the story page.
+      final videoId = item.raw['video_id'];
+      return videoId is num ? '/watch/${videoId.toInt()}' : '/story/$slug';
+    }
     final part = switch (format) {
       _ContinueFormat.reading => item.raw['chapter_slug'],
       _ContinueFormat.listening => item.raw['audio_slug'],
-      _ContinueFormat.watching => item.raw['video_slug'],
+      _ContinueFormat.watching => null,
     };
     if (part is! String || part.isEmpty) return '/story/$slug';
     return switch (format) {
       _ContinueFormat.reading => '/read/$slug/$part',
       _ContinueFormat.listening => '/listen/$slug/$part',
-      _ContinueFormat.watching => '/watch/$slug/$part',
+      _ContinueFormat.watching => '/story/$slug',
     };
   }
 }
@@ -1195,9 +985,10 @@ final class _ContinueEntry {
 /// "Continue where you left off": the reader's latest unfinished stories
 /// across reading, listening and watching, color coded by format.
 class _ContinueRail extends StatelessWidget {
-  const _ContinueRail({required this.entries});
+  const _ContinueRail({required this.entries, this.title});
 
   final List<_ContinueEntry> entries;
+  final String? title;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -1211,7 +1002,7 @@ class _ContinueRail extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                'Continue Where You Left Off',
+                title ?? 'Continue Where You Left Off',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),

@@ -543,11 +543,12 @@ List<_ChapterEntry> _chapterEntries(StoryDetail story, _ChapterTabType type) =>
       ],
       _ChapterTabType.watch => [
         for (final video in story.videos)
-          _ChapterEntry(
-            FormatIcons.watch,
-            video.title,
-            '/watch/${story.slug}/${video.slug}',
-          ),
+          if (video.id != null)
+            _ChapterEntry(
+              FormatIcons.watch,
+              video.title,
+              '/watch/${video.id}',
+            ),
       ],
     };
 

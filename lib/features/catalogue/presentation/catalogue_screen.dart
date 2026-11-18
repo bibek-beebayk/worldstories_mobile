@@ -18,13 +18,12 @@ final catalogueFiltersProvider = FutureProvider<CatalogueFilters>(
   (ref) => ref.watch(catalogueRepositoryProvider).fetchFilters(),
 );
 
-enum _LibraryMode { read, listen, watch, readAlong, quickRead }
+enum _LibraryMode { read, listen, readAlong, quickRead }
 
 extension on _LibraryMode {
   String get label => switch (this) {
     _LibraryMode.read => 'Read',
     _LibraryMode.listen => 'Listen',
-    _LibraryMode.watch => 'Watch',
     _LibraryMode.readAlong => 'Read Along',
     _LibraryMode.quickRead => 'Quick Read',
   };
@@ -32,7 +31,6 @@ extension on _LibraryMode {
   IconData get icon => switch (this) {
     _LibraryMode.read => FormatIcons.read,
     _LibraryMode.listen => FormatIcons.listen,
-    _LibraryMode.watch => FormatIcons.watch,
     _LibraryMode.readAlong => FormatIcons.readAlong,
     _LibraryMode.quickRead => FormatIcons.quickRead,
   };
@@ -106,7 +104,6 @@ class _CatalogueScreenState extends ConsumerState<CatalogueScreen> {
     search: search.text.trim(),
     sort: sort,
     hasAudio: libraryMode == _LibraryMode.listen,
-    hasVideo: libraryMode == _LibraryMode.watch,
     hasSummary: libraryMode == _LibraryMode.quickRead,
     hasReadAlong: libraryMode == _LibraryMode.readAlong,
     genreIds: {...genres},

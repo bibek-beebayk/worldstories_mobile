@@ -20,7 +20,8 @@ import '../features/reader/presentation/epub_reader_screen.dart';
 import '../features/reader/presentation/pdf_reader_screen.dart';
 import '../features/player/presentation/audiobook_player_screen.dart';
 import '../features/player/presentation/read_along_screen.dart';
-import '../features/player/presentation/video_player_screen.dart';
+import '../features/watch/presentation/video_watch_screen.dart';
+import '../features/watch/presentation/watch_screen.dart';
 import '../features/reader/presentation/quick_read_screen.dart';
 import '../features/blog/presentation/blog_list_screen.dart';
 import '../features/blog/presentation/blog_detail_screen.dart';
@@ -110,6 +111,14 @@ final routerProvider = Provider<GoRouter>((ref) {
                 builder: (context, state) => CatalogueScreen(
                   initialMoodSlugs: state.uri.queryParameters['moods'] ?? '',
                 ),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/watch',
+                builder: (context, state) => const WatchScreen(),
               ),
             ],
           ),
@@ -206,10 +215,13 @@ final routerProvider = Provider<GoRouter>((ref) {
         ),
       ),
       GoRoute(
-        path: '/watch/:storySlug/:videoSlug',
-        builder: (context, state) => VideoPlayerScreen(
-          storySlug: state.pathParameters['storySlug']!,
-          videoSlug: state.pathParameters['videoSlug']!,
+        path: '/watch/:videoId',
+        redirect: (context, state) =>
+            int.tryParse(state.pathParameters['videoId'] ?? '') == null
+            ? '/watch'
+            : null,
+        builder: (context, state) => VideoWatchScreen(
+          videoId: int.parse(state.pathParameters['videoId']!),
         ),
       ),
       GoRoute(

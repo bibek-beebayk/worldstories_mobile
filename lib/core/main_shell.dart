@@ -62,6 +62,11 @@ class MainShell extends StatelessWidget {
                     label: 'Browse',
                   ),
                   NavigationDestination(
+                    icon: Icon(Icons.smart_display_outlined),
+                    selectedIcon: Icon(Icons.smart_display),
+                    label: 'Watch',
+                  ),
+                  NavigationDestination(
                     icon: Icon(Icons.collections_bookmark_outlined),
                     selectedIcon: Icon(Icons.collections_bookmark),
                     label: 'My Library',

@@ -29,29 +29,47 @@ class MoodsScreen extends ConsumerWidget {
               padding: const EdgeInsets.all(16),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 2,
-                childAspectRatio: 1.4,
+                mainAxisExtent: 156,
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 12,
               ),
               itemCount: moods.length,
               itemBuilder: (context, index) {
                 final mood = moods[index];
+                final colors = _moodColors(mood.slug);
                 return Card(
+                  color: colors.background,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: colors.foreground.withValues(alpha: 0.18)),
+                  ),
                   child: Padding(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(12),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Text(mood.icon, style: const TextStyle(fontSize: 28)),
-                        const SizedBox(height: 8),
+                        Text(mood.icon, style: const TextStyle(fontSize: 26)),
+                        const SizedBox(height: 4),
                         Text(
                           mood.name,
-                          style: Theme.of(context).textTheme.titleMedium,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                color: colors.foreground,
+                                fontWeight: FontWeight.w700,
+                              ),
                         ),
                         Text(
                           '${mood.storiesCount} stories',
-                          style: Theme.of(context).textTheme.bodySmall,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: colors.foreground.withValues(alpha: 0.75),
+                              ),
                         ),
                       ],
                     ),
@@ -62,4 +80,28 @@ class MoodsScreen extends ConsumerWidget {
           ),
         ),
   );
+}
+
+typedef _MoodColors = ({Color background, Color foreground});
+
+const _moodPalette = <_MoodColors>[
+  (background: Color(0xFFFFE4E8), foreground: Color(0xFF9F1239)), // rose
+  (background: Color(0xFFFFEDD5), foreground: Color(0xFF9A3412)), // orange
+  (background: Color(0xFFFEF9C3), foreground: Color(0xFF854D0E)), // yellow
+  (background: Color(0xFFDCFCE7), foreground: Color(0xFF166534)), // green
+  (background: Color(0xFFCCFBF1), foreground: Color(0xFF115E59)), // teal
+  (background: Color(0xFFE0F2FE), foreground: Color(0xFF075985)), // sky
+  (background: Color(0xFFE0E7FF), foreground: Color(0xFF3730A3)), // indigo
+  (background: Color(0xFFF3E8FF), foreground: Color(0xFF6B21A8)), // purple
+  (background: Color(0xFFFCE7F3), foreground: Color(0xFF9D174D)), // pink
+];
+
+/// A stable color per mood, derived from its slug so it never changes
+/// between launches or list order.
+_MoodColors _moodColors(String slug) {
+  var hash = 0;
+  for (final unit in slug.codeUnits) {
+    hash = (hash * 31 + unit) & 0x7fffffff;
+  }
+  return _moodPalette[hash % _moodPalette.length];
 }

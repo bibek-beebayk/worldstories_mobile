@@ -48,6 +48,7 @@ final class AnalyticsService {
     AnalyticsEventType eventType, {
     String? storySlug,
     String? blogSlug,
+    int? videoId,
     double? durationSeconds,
     double? value,
     Map<String, dynamic>? metadata,
@@ -56,6 +57,7 @@ final class AnalyticsService {
       eventType,
       storySlug: storySlug,
       blogSlug: blogSlug,
+      videoId: videoId,
       durationSeconds: durationSeconds,
       value: value,
       metadata: metadata,
@@ -66,6 +68,7 @@ final class AnalyticsService {
     AnalyticsEventType eventType, {
     String? storySlug,
     String? blogSlug,
+    int? videoId,
     double? durationSeconds,
     double? value,
     Map<String, dynamic>? metadata,
@@ -78,6 +81,7 @@ final class AnalyticsService {
       sessionId: _sessionId,
       storySlug: storySlug,
       blogSlug: blogSlug,
+      videoId: videoId,
       durationSeconds: durationSeconds,
       value: value,
       metadata: metadata,

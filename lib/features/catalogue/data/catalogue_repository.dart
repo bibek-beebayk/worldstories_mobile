@@ -38,7 +38,6 @@ final class CatalogueQuery {
     this.search = '',
     this.sort = 'recent',
     this.hasAudio = false,
-    this.hasVideo = false,
     this.hasSummary = false,
     this.hasReadAlong = false,
     this.genreIds = const {},
@@ -53,7 +52,6 @@ final class CatalogueQuery {
   final String search;
   final String sort;
   final bool hasAudio;
-  final bool hasVideo;
   final bool hasSummary;
   final bool hasReadAlong;
   final Set<int> genreIds;
@@ -69,7 +67,6 @@ final class CatalogueQuery {
     'sort': sort,
     if (search.isNotEmpty) 'q': search,
     if (hasAudio) 'has_audio': true,
-    if (hasVideo) 'has_video': true,
     if (hasSummary) 'has_summary': true,
     if (hasReadAlong) 'has_read_along': true,
     if (genreIds.isNotEmpty) 'genres': genreIds.join(','),

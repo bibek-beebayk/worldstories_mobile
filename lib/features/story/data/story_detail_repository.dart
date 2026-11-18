@@ -22,12 +22,14 @@ final class StoryChapter {
 
 final class StoryMedia {
   const StoryMedia({
+    this.id,
     required this.title,
     required this.slug,
     this.readAlongAvailable = false,
     this.youtubeId,
     this.aspectRatio = 16 / 9,
   });
+  final int? id;
   final String title;
   final String slug;
   final bool readAlongAvailable;
@@ -53,6 +55,7 @@ final class StoryMedia {
     }
 
     return StoryMedia(
+      id: (json['id'] as num?)?.toInt(),
       title: json['title'] as String,
       slug: json['slug'] as String,
       readAlongAvailable: json['read_along_available'] as bool? ?? false,
