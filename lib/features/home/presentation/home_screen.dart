@@ -853,7 +853,19 @@ class _FallbackCover extends StatelessWidget {
         ],
       ),
     ),
-    child: Padding(
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 100 || constraints.maxHeight < 140) {
+          return const Center(
+            child: Icon(Icons.auto_stories, color: Colors.white54, size: 22),
+          );
+        }
+        return _fullContent();
+      },
+    ),
+  );
+
+  Widget _fullContent() => Padding(
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -899,8 +911,7 @@ class _FallbackCover extends StatelessWidget {
           ],
         ],
       ),
-    ),
-  );
+    );
 }
 
 class _PromoBanner extends StatelessWidget {

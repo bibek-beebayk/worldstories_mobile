@@ -54,7 +54,8 @@ final class HomeSnapshot {
     dailyStoryConfigured:
         json['daily_story'] is Map &&
         (json['daily_story'] as Map)['configured'] == true,
-    dailyStory: json['daily_story'] is Map
+    dailyStory:
+        json['daily_story'] is Map && (json['daily_story'] as Map)['story'] is Map
         ? StorySummary.fromJson(
             Map<String, dynamic>.from(
               (json['daily_story'] as Map)['story'] as Map,
