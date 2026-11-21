@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -19,7 +20,14 @@ class CachedAppImage extends StatelessWidget {
     this.diskCacheWidth = 900,
     this.placeholder,
     this.error,
+    this.loadTimeout = const Duration(seconds: 8),
   });
+
+  /// How long the loading placeholder may stay up before the [error] fallback
+  /// is shown instead. Third-party hosts (e.g. a cover hotlinked from another
+  /// site) can hang or throttle; without this the card would spin forever.
+  /// If the image does arrive later it still replaces the fallback.
+  final Duration loadTimeout;
 
   final String imageUrl;
   final BoxFit fit;
@@ -39,11 +47,51 @@ class CachedAppImage extends StatelessWidget {
     memCacheWidth: decodeWidth,
     maxWidthDiskCache: diskCacheWidth,
     fadeInDuration: const Duration(milliseconds: 160),
-    placeholder: (context, url) =>
-        placeholder?.call(context) ?? const BookPageOpeningLoader(),
+    placeholder: (context, url) => _TimedPlaceholder(
+      timeout: loadTimeout,
+      loading: placeholder ?? (_) => const BookPageOpeningLoader(),
+      fallback: error ?? (_) => const _ImageErrorPlaceholder(),
+    ),
     errorWidget: (context, url, failure) =>
         error?.call(context) ?? const _ImageErrorPlaceholder(),
   );
+}
+
+class _TimedPlaceholder extends StatefulWidget {
+  const _TimedPlaceholder({
+    required this.timeout,
+    required this.loading,
+    required this.fallback,
+  });
+  final Duration timeout;
+  final WidgetBuilder loading;
+  final WidgetBuilder fallback;
+
+  @override
+  State<_TimedPlaceholder> createState() => _TimedPlaceholderState();
+}
+
+class _TimedPlaceholderState extends State<_TimedPlaceholder> {
+  late final Timer _timer;
+  bool _timedOut = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(widget.timeout, () {
+      if (mounted) setState(() => _timedOut = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _timedOut ? widget.fallback(context) : widget.loading(context);
 }
 
 class BookPageOpeningLoader extends StatefulWidget {

@@ -126,11 +126,6 @@ class HomeScreen extends ConsumerWidget {
         ),
         actions: [
           IconButton(
-            onPressed: surprise,
-            icon: const Icon(Icons.shuffle),
-            tooltip: 'Surprise Me',
-          ),
-          IconButton(
             onPressed: () => context.push('/search'),
             icon: const Icon(Icons.search),
             tooltip: 'Search',
